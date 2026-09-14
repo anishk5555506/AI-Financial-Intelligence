@@ -10,16 +10,24 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 </head>
 
 <body>
 
     <header>
+
         <h1>AI Financial Intelligence</h1>
+
         <p>Analyze • Understand • Explore Financial Data</p>
+
     </header>
 
+
     <main>
+
+
+        <!-- Company Selection -->
 
         <section class="company-selector">
 
@@ -28,36 +36,64 @@
             </label>
 
             <select id="companySelect">
+
                 <option value="">Loading...</option>
+
             </select>
 
         </section>
 
 
+
+        <!-- Financial Cards -->
+
         <section class="cards">
 
+
             <div class="card">
+
                 <h3>Current Price</h3>
+
                 <p id="currentPrice">--</p>
+
             </div>
 
+
+
             <div class="card">
+
                 <h3>Price Change</h3>
+
                 <p id="priceChange">--</p>
+
             </div>
 
+
+
             <div class="card">
+
                 <h3>Volume</h3>
+
                 <p id="volume">--</p>
+
             </div>
 
+
+
             <div class="card">
+
                 <h3>Trend</h3>
+
                 <p id="trend">--</p>
+
             </div>
+
 
         </section>
 
+
+
+        <!-- Historical Chart -->
 
         <section class="chart-container">
 
@@ -68,29 +104,128 @@
         </section>
 
 
+
+        <!-- Financial Insight -->
+
         <section class="insight">
 
             <h2>Financial Insight</h2>
 
+
             <div class="insight-box">
 
                 <p>
+
                     Current Trend:
+
                     <strong id="insightTrend">--</strong>
+
                 </p>
 
+
                 <p id="insightText">
+
                     Select a company to view financial information.
+
                 </p>
 
             </div>
 
         </section>
 
+
+
+        <!-- AI Stock Prediction -->
+
+        <section class="ai-prediction">
+
+            <h2>AI Stock Prediction</h2>
+
+
+            <p class="prediction-company">
+
+                Prediction for:
+
+                <strong id="predictionCompany">--</strong>
+
+            </p>
+
+
+
+            <!-- Prediction Cards -->
+
+            <div class="prediction-cards">
+
+
+                <div class="prediction-card">
+
+                    <h3>Current Price</h3>
+
+                    <p id="predictionCurrentPrice">--</p>
+
+                </div>
+
+
+
+                <div class="prediction-card">
+
+                    <h3>Predicted Price</h3>
+
+                    <p id="predictedPrice">--</p>
+
+                </div>
+
+
+            </div>
+
+
+
+            <!-- Model Performance -->
+
+            <div class="model-metrics">
+
+
+                <p>
+
+                    Mean Absolute Error (MAE):
+
+                    <strong id="mae">--</strong>
+
+                </p>
+
+
+
+                <p>
+
+                    Root Mean Squared Error (RMSE):
+
+                    <strong id="rmse">--</strong>
+
+                </p>
+
+
+            </div>
+
+
+
+            <p id="predictionStatus">
+
+                Select a company to generate prediction.
+
+            </p>
+
+
+        </section>
+
+
     </main>
 
 
+
+    <!-- JavaScript -->
+
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+
 
 </body>
 

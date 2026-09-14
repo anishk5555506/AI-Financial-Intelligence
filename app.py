@@ -1,4 +1,5 @@
 from flask import Flask, render_template, jsonify
+from model import train_model
 import pandas as pd
 
 app = Flask(__name__)
@@ -55,6 +56,46 @@ def get_company_data(company):
     }
 
     return jsonify(result)
+
+
+@app.route("/api/predict/<company>")
+def predict_company(company):
+
+    company_data = data[
+        data["Company"] == company
+    ].copy()
+
+    if company_data.empty:
+        return jsonify({
+            "error": "Company not found"
+        }), 404
+
+    company_data["Date"] = pd.to_datetime(
+        company_data["Date"]
+    )
+
+    company_data = company_data.sort_values("Date")
+
+    if len(company_data) < 10:
+        return jsonify({
+            "error": "Not enough historical data"
+        }), 400
+
+    try:
+        result = train_model(company_data)
+
+        return jsonify({
+    "company": company,
+    "current_price": float(company_data.iloc[-1]["Close"]),
+    "predicted_price": result["predicted_price"],
+    "mae": result["mae"],
+    "rmse": result["rmse"]
+})
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 
 if __name__ == "__main__":

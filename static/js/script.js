@@ -1,3 +1,4 @@
+
 let stockChart;
 
 
@@ -25,15 +26,21 @@ async function loadCompanies() {
 
     // Load the first company
     loadCompanyData(companies[0]);
+
 }
 
 
 // Load selected company's financial data
 async function loadCompanyData(company) {
 
-    const response = await fetch("/api/company/" + company);
+    const response = await fetch(
+        "/api/company/" + company
+    );
 
     const data = await response.json();
+
+
+    // Update financial cards
 
     document.getElementById("currentPrice").textContent =
         "$" + data.latest_price;
@@ -51,18 +58,23 @@ async function loadCompanyData(company) {
         data.trend;
 
 
+
+    // Update financial insight
+
     if (data.trend === "Positive") {
 
         document.getElementById("insightText").textContent =
             "The stock has increased compared with the previous trading day.";
 
     }
+
     else if (data.trend === "Negative") {
 
         document.getElementById("insightText").textContent =
             "The stock has decreased compared with the previous trading day.";
 
     }
+
     else {
 
         document.getElementById("insightText").textContent =
@@ -71,17 +83,31 @@ async function loadCompanyData(company) {
     }
 
 
+
+    // Update historical chart
+
     createChart(data);
+
+
+
+    // Load AI prediction
+
+    loadPrediction(company);
+
 }
 
 
+
 // Create stock price chart
+
 function createChart(data) {
 
     const ctx = document.getElementById("stockChart");
 
     if (stockChart) {
+
         stockChart.destroy();
+
     }
 
     stockChart = new Chart(ctx, {
@@ -93,13 +119,17 @@ function createChart(data) {
             labels: data.dates,
 
             datasets: [
+
                 {
+
                     label: data.company + " Closing Price",
 
                     data: data.prices,
 
                     tension: 0.3
+
                 }
+
             ]
 
         },
@@ -111,7 +141,9 @@ function createChart(data) {
             scales: {
 
                 y: {
+
                     beginAtZero: false
+
                 }
 
             }
@@ -119,10 +151,101 @@ function createChart(data) {
         }
 
     });
+
 }
 
 
+
+// Load AI stock prediction
+
+async function loadPrediction(company) {
+
+    const status = document.getElementById(
+        "predictionStatus"
+    );
+
+    status.textContent = "Generating AI prediction...";
+
+
+    try {
+
+        const response = await fetch(
+            "/api/predict/" + company
+        );
+
+        const data = await response.json();
+
+
+        if (data.error) {
+
+            status.textContent = data.error;
+
+            return;
+
+        }
+
+
+        // Display company name
+
+        document.getElementById(
+            "predictionCompany"
+        ).textContent = data.company;
+
+
+
+        // Display current price
+
+        document.getElementById(
+            "predictionCurrentPrice"
+        ).textContent = "$" + data.current_price;
+
+
+
+        // Display predicted price
+
+        document.getElementById(
+            "predictedPrice"
+        ).textContent = "$" + data.predicted_price;
+
+
+
+        // Display model metrics
+
+        document.getElementById(
+            "mae"
+        ).textContent = data.mae;
+
+
+
+        document.getElementById(
+            "rmse"
+        ).textContent = data.rmse;
+
+
+
+        status.textContent =
+            "AI prediction generated successfully.";
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Prediction error:",
+            error
+        );
+
+        status.textContent =
+            "Unable to generate prediction.";
+
+    }
+
+}
+
+
+
 // Detect company selection
+
 document.getElementById("companySelect")
     .addEventListener("change", function() {
 
@@ -131,5 +254,7 @@ document.getElementById("companySelect")
     });
 
 
+
 // Start application
+
 loadCompanies();
