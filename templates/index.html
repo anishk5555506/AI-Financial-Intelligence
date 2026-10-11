@@ -1,232 +1,297 @@
+
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
     <title>AI Financial Intelligence</title>
-
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 </head>
-
 <body>
+<header class="topbar">
+    <div class="brand">
+        <div class="brand-icon">AI</div>
+        <div>
+            <h1>Financial Intelligence</h1>
+            <p>Machine learning powered market analysis</p>
+        </div>
+    </div>
+    <div class="live-indicator"><span class="status-dot"></span> Historical market data</div>
+</header>
 
-    <header>
-
-        <h1>AI Financial Intelligence</h1>
-
-        <p>Analyze • Understand • Explore Financial Data</p>
-
-    </header>
-
-
-    <main>
-
-
-        <!-- Company Selection -->
-
-        <section class="company-selector">
-
-            <label for="companySelect">
-                Select Company
-            </label>
-
+<main class="container">
+    <section class="welcome-section">
+        <div>
+            <p class="eyebrow">MARKET ANALYTICS PLATFORM</p>
+            <h2>Understand the market.<br>Analyze risk. Explore predictions.</h2>
+            <p class="welcome-description">
+                Analyze historical stock performance, compare ML models, and evaluate financial risk.
+            </p>
+        </div>
+        <div class="company-control">
+            <label for="companySelect">Select company</label>
             <select id="companySelect">
-
-                <option value="">Loading...</option>
-
+                <option value="Apple">Apple</option>
+                <option value="Microsoft">Microsoft</option>
+                <option value="Tesla">Tesla</option>
             </select>
+            <p id="companyStatus" class="status-message" aria-live="polite">Loading data...</p>
+        </div>
+    </section>
 
-        </section>
-
-
-
-        <!-- Financial Cards -->
-
-        <section class="cards">
-
-
-            <div class="card">
-
-                <h3>Current Price</h3>
-
-                <p id="currentPrice">--</p>
-
+    <section class="section">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">MARKET OVERVIEW</p>
+                <h2>Stock Performance</h2>
+                <p class="section-description">Latest available close and historical price movement.</p>
             </div>
+        </div>
 
+        <div class="metric-grid four-columns">
+            <article class="metric-card">
+                <span class="metric-label">Latest Close</span>
+                <strong class="metric-value" id="currentPrice">—</strong>
+                <span class="metric-footnote">Adjusted closing price (USD)</span>
+            </article>
+            <article class="metric-card">
+                <span class="metric-label">Daily Price Change</span>
+                <strong class="metric-value" id="priceChange">—</strong>
+                <span class="metric-footnote" id="percentageChange">—</span>
+            </article>
+            <article class="metric-card">
+                <span class="metric-label">Trading Volume</span>
+                <strong class="metric-value" id="volume">—</strong>
+                <span class="metric-footnote">Latest available session</span>
+            </article>
+            <article class="metric-card">
+                <span class="metric-label">Daily Trend</span>
+                <strong class="metric-value" id="trend">—</strong>
+                <span class="metric-footnote">Compared with previous close</span>
+            </article>
+        </div>
 
-
-            <div class="card">
-
-                <h3>Price Change</h3>
-
-                <p id="priceChange">--</p>
-
-            </div>
-
-
-
-            <div class="card">
-
-                <h3>Volume</h3>
-
-                <p id="volume">--</p>
-
-            </div>
-
-
-
-            <div class="card">
-
-                <h3>Trend</h3>
-
-                <p id="trend">--</p>
-
-            </div>
-
-
-        </section>
-
-
-
-        <!-- Historical Chart -->
-
-        <section class="chart-container">
-
-            <h2>Historical Stock Price</h2>
-
-            <canvas id="stockChart"></canvas>
-
-        </section>
-
-
-
-        <!-- Financial Insight -->
-
-        <section class="insight">
-
-            <h2>Financial Insight</h2>
-
-
-            <div class="insight-box">
-
-                <p>
-
-                    Current Trend:
-
-                    <strong id="insightTrend">--</strong>
-
-                </p>
-
-
-                <p id="insightText">
-
-                    Select a company to view financial information.
-
-                </p>
-
-            </div>
-
-        </section>
-
-
-
-        <!-- AI Stock Prediction -->
-
-        <section class="ai-prediction">
-
-            <h2>AI Stock Prediction</h2>
-
-
-            <p class="prediction-company">
-
-                Prediction for:
-
-                <strong id="predictionCompany">--</strong>
-
-            </p>
-
-
-
-            <!-- Prediction Cards -->
-
-            <div class="prediction-cards">
-
-
-                <div class="prediction-card">
-
-                    <h3>Current Price</h3>
-
-                    <p id="predictionCurrentPrice">--</p>
-
+        <article class="panel">
+            <div class="panel-heading">
+                <div>
+                    <h3>Historical Stock Price</h3>
+                    <p>Daily adjusted closing prices.</p>
                 </div>
+                <span class="panel-tag">Historical</span>
+            </div>
+            <div class="chart-container large-chart"><canvas id="stockChart"></canvas></div>
+        </article>
 
+        <article class="insight-panel">
+            <div class="insight-symbol">i</div>
+            <div>
+                <h3 id="insightTrend">Market Insight</h3>
+                <p id="insightText">Insights will appear after data loads.</p>
+            </div>
+        </article>
+    </section>
 
+    <section class="section">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">MACHINE LEARNING</p>
+                <h2>Stock Price Prediction</h2>
+                <p class="section-description">Forecast the next close and evaluate performance on historical test data.</p>
+            </div>
+        </div>
 
-                <div class="prediction-card">
-
-                    <h3>Predicted Price</h3>
-
-                    <p id="predictedPrice">--</p>
-
+        <article class="panel">
+            <div class="model-toolbar">
+                <div class="control-group">
+                    <label for="modelSelect">Prediction model</label>
+                    <select id="modelSelect">
+                        <option value="random_forest">Random Forest</option>
+                        <option value="hist_gradient_boosting">HistGradientBoosting</option>
+                        <option value="linear_regression">Linear Regression</option>
+                        <option value="knn">KNN Regressor</option>
+                        <option value="svr">Support Vector Regression</option>
+                    </select>
                 </div>
-
-
+                <button id="predictButton" class="primary-button" type="button">Run Prediction</button>
             </div>
 
+            <p id="predictionStatus" class="status-message" aria-live="polite"></p>
 
-
-            <!-- Model Performance -->
-
-            <div class="model-metrics">
-
-
-                <p>
-
-                    Mean Absolute Error (MAE):
-
-                    <strong id="mae">--</strong>
-
-                </p>
-
-
-
-                <p>
-
-                    Root Mean Squared Error (RMSE):
-
-                    <strong id="rmse">--</strong>
-
-                </p>
-
-
+            <div class="metric-grid four-columns">
+                <article class="metric-card inner-card">
+                    <span class="metric-label">Current Close</span>
+                    <strong class="metric-value" id="predictionCurrentPrice">—</strong>
+                </article>
+                <article class="metric-card inner-card">
+                    <span class="metric-label">Predicted Next Close</span>
+                    <strong class="metric-value" id="predictedPrice">—</strong>
+                </article>
+                <article class="metric-card inner-card">
+                    <span class="metric-label">Holdout MAE</span>
+                    <strong class="metric-value" id="mae">—</strong>
+                </article>
+                <article class="metric-card inner-card">
+                    <span class="metric-label">Holdout RMSE</span>
+                    <strong class="metric-value" id="rmse">—</strong>
+                </article>
             </div>
 
+            <div class="metric-grid three-columns compact-grid">
+                <div class="mini-metric"><span>Baseline MAE</span><strong id="baselineMae">—</strong></div>
+                <div class="mini-metric"><span>Baseline RMSE</span><strong id="baselineRmse">—</strong></div>
+                <div class="mini-metric"><span>Holdout Test Samples</span><strong id="testSamples">—</strong></div>
+            </div>
 
+            <div class="metric-grid three-columns">
+                <div class="mini-metric">
+                    <span>Model Directional Accuracy</span>
+                    <strong id="directionalAccuracy">—</strong>
+                </div>
+                <div class="mini-metric">
+                    <span>Baseline Directional Accuracy</span>
+                    <strong id="baselineDirectionalAccuracy">—</strong>
+                </div>
+                <div class="mini-metric">
+                    <span>Walk-Forward Folds / Samples</span>
+                    <strong id="walkForwardSamples">—</strong>
+                </div>
+            </div>
 
-            <p id="predictionStatus">
+            <div class="metric-grid three-columns">
+                <div class="mini-metric"><span>Walk-Forward MAE</span><strong id="walkForwardMae">—</strong></div>
+                <div class="mini-metric"><span>Walk-Forward RMSE</span><strong id="walkForwardRmse">—</strong></div>
+                <div class="mini-metric"><span>Walk-Forward Directional Accuracy</span><strong id="walkForwardDirection">—</strong></div>
+            </div>
 
-                Select a company to generate prediction.
+            <div class="result-summary">
+                <h3 id="selectedModelName">Selected Model</h3>
+                <p id="modelResult">Run a prediction to see the results.</p>
+                <p id="evaluationNote" class="muted-text">Lower MAE and RMSE indicate smaller prediction errors.</p>
+            </div>
 
+            <div class="panel-heading chart-heading">
+                <div>
+                    <h3>Actual vs Predicted Prices</h3>
+                    <p>Historical holdout test data; not future actual prices.</p>
+                </div>
+            </div>
+            <div class="chart-container"><canvas id="predictionChart"></canvas></div>
+        </article>
+
+        <article class="panel">
+            <div class="panel-heading">
+                <div>
+                    <h3>Model Comparison</h3>
+                    <p>Compare all five models on the same historical dataset.</p>
+                </div>
+                <button id="compareButton" class="secondary-button" type="button">Compare All Models</button>
+            </div>
+
+            <p id="comparisonStatus" class="status-message" aria-live="polite"></p>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Predicted Close</th>
+                        <th>MAE</th>
+                        <th>RMSE</th>
+                        <th>Baseline MAE</th>
+                        <th>Baseline RMSE</th>
+                        <th>Directional Accuracy</th>
+                        <th>Walk-Forward MAE</th>
+                        <th>Walk-Forward RMSE</th>
+                        <th>WF Directional Accuracy</th>
+                        <th>Beats Baseline?</th>
+                    </tr>
+                    </thead>
+                    <tbody id="modelComparisonBody">
+                    <tr><td colspan="11" class="empty-cell">Select Compare All Models to run the comparison.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="muted-text table-note">
+                WF means walk-forward. Models are compared against a previous-close baseline.
+                Lower errors are better; higher directional accuracy is better.
             </p>
+        </article>
+    </section>
 
+    <section class="section" id="riskAnalytics">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">PORTFOLIO RISK INDICATORS</p>
+                <h2>Financial Risk Analytics</h2>
+                <p class="section-description">Historical return, variability, downside exposure, and risk-adjusted return.</p>
+            </div>
+            <button id="riskRefreshButton" class="secondary-button" type="button">Refresh Risk Analysis</button>
+        </div>
 
-        </section>
+        <div class="risk-period panel">
+            <div><span class="metric-label">Analysis Period</span><strong id="riskPeriod">—</strong></div>
+            <div><span class="metric-label">Trading Observations</span><strong id="riskObservations">—</strong></div>
+            <div><span class="metric-label">Assumed Risk-Free Rate</span><strong id="riskFreeRate">—</strong></div>
+        </div>
 
+        <p id="riskStatus" class="status-message" aria-live="polite">Risk metrics will load with the selected company.</p>
 
-    </main>
+        <div class="metric-grid four-columns">
+            <article class="metric-card risk-card">
+                <span class="metric-label">Cumulative Return</span>
+                <strong class="metric-value" id="cumulativeReturn">—</strong>
+                <span class="metric-footnote">Change over the analysis period</span>
+            </article>
+            <article class="metric-card risk-card">
+                <span class="metric-label">Annualized Volatility</span>
+                <strong class="metric-value" id="annualizedVolatility">—</strong>
+                <span class="metric-footnote">Annualized standard deviation</span>
+            </article>
+            <article class="metric-card risk-card">
+                <span class="metric-label">Maximum Drawdown</span>
+                <strong class="metric-value" id="maximumDrawdown">—</strong>
+                <span class="metric-footnote">Largest peak-to-trough decline</span>
+            </article>
+            <article class="metric-card risk-card">
+                <span class="metric-label">Sharpe Ratio</span>
+                <strong class="metric-value" id="sharpeRatio">—</strong>
+                <span class="metric-footnote">Annualized excess return per unit of volatility</span>
+            </article>
+        </div>
 
+        <article class="panel">
+            <div class="panel-heading">
+                <div><h3>Cumulative Return Over Time</h3><p>Change from the first adjusted closing price.</p></div>
+            </div>
+            <div class="chart-container"><canvas id="cumulativeReturnChart"></canvas></div>
+        </article>
 
+        <article class="panel">
+            <div class="panel-heading">
+                <div><h3>Historical Drawdown</h3><p>Percentage below the previous highest closing price.</p></div>
+            </div>
+            <div class="chart-container"><canvas id="drawdownChart"></canvas></div>
+        </article>
 
-    <!-- JavaScript -->
+        <article class="risk-disclaimer">
+            <strong>How to interpret these metrics</strong>
+            <ul>
+                <li><b>Cumulative return:</b> historical price change over the selected period.</li>
+                <li><b>Volatility:</b> higher values indicate more variable daily returns.</li>
+                <li><b>Maximum drawdown:</b> the largest observed decline from a previous peak.</li>
+                <li><b>Sharpe ratio:</b> historical excess return relative to volatility.</li>
+            </ul>
+            <p id="riskDisclaimerNote">Historical estimates do not guarantee future performance.</p>
+        </article>
+    </section>
 
-    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <footer class="footer">
+        <p>AI Financial Intelligence · Machine Learning and Financial Analytics</p>
+        <p>Historical data supplied by Yahoo Finance. Availability and timing may vary.</p>
+    </footer>
+</main>
 
-
+<script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
-
 </html>
