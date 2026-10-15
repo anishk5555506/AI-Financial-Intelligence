@@ -3,7 +3,7 @@ from flask import Flask, render_template, jsonify, request
 import pandas as pd
 import numpy as np
 import yfinance as yf
-
+from oracle.db import fetch_stock_history
 from model import MODELS, train_model, compare_models
 
 app = Flask(__name__)
@@ -19,51 +19,27 @@ DEFAULT_RISK_FREE_RATE = 0.04
 
 
 def get_company_data(company):
+
     ticker = TICKERS.get(company)
 
     if ticker is None:
         return None
 
     try:
-        data = yf.download(
-            ticker,
-            period="2y",
-            interval="1d",
-            auto_adjust=True,
-            progress=False
-        )
+        data = fetch_stock_history(ticker)
 
         if data.empty:
             return None
 
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
-
-        data = data.reset_index()
-
-        required = ["Date", "Open", "High", "Low", "Close", "Volume"]
-
-        if not all(column in data.columns for column in required):
-            return None
-
-        data = data[required].copy()
-        data["Date"] = pd.to_datetime(data["Date"])
-
-        numeric_columns = ["Open", "High", "Low", "Close", "Volume"]
-        data[numeric_columns] = data[numeric_columns].apply(
-            pd.to_numeric, errors="coerce"
-        )
-
-        data = data.dropna(subset=numeric_columns)
-        data = data[data["Close"] > 0]
-        data = data.sort_values("Date").reset_index(drop=True)
-
         return data
 
     except Exception:
-        app.logger.exception("Failed to download data for %s", company)
-        return None
+        app.logger.exception(
+            "Failed to retrieve stock data from Oracle for %s",
+            company
+        )
 
+        return None
 
 def json_safe(value):
     """Convert NumPy values to values Flask can serialize."""
@@ -109,7 +85,7 @@ def get_company_data_api(company):
 
     if data is None or data.empty:
         return jsonify({
-            "error": "Unable to retrieve historical data from Yahoo Finance."
+            "error": "Unable to retrieve historical data from Oracle Database."
         }), 502
 
     if len(data) < 2:

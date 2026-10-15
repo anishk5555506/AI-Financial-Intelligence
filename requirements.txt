@@ -3,3 +3,5 @@ pandas
 scikit-learn
 yfinance
 numpy
+oracledb
+python-dotenv
