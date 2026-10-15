@@ -1,7 +1,7 @@
-flask 
-pandas
-scikit-learn
-yfinance
-numpy
-oracledb
-python-dotenv
+```text
+Flask>=3.0
+yfinance>=0.2.50
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.5
+```
