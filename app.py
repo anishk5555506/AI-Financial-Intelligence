@@ -1,4 +1,3 @@
-```python
 from flask import Flask, render_template, jsonify, request
 import logging
 
@@ -13,7 +12,7 @@ from model import (
     predict_all_horizons,
     compare_models,
 )
-
+from spark_data import get_stock_data
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
 
@@ -26,15 +25,68 @@ TICKERS = {
 TRADING_DAYS = 252
 DEFAULT_RISK_FREE_RATE = 0.04
 
-
 def get_company_data(company):
-    """Download and clean daily adjusted OHLCV data from Yahoo Finance."""
-    ticker = TICKERS.get(company)
+    """Load historical OHLCV data from Spark/HDFS, with Yahoo Finance fallback."""
 
-    if ticker is None:
+    if company not in TICKERS:
         return None
 
     try:
+        # Primary source: historical data processed by Spark and stored in HDFS.
+        data = get_stock_data(company)
+
+        required = [
+            "Date",
+            "Open",
+            "High",
+            "Low",
+            "Close",
+            "Volume",
+        ]
+
+        if data is None or data.empty:
+            raise ValueError("No stock data returned from HDFS.")
+
+        data = data[required].copy()
+        data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+
+        for column in ["Open", "High", "Low", "Close", "Volume"]:
+            data[column] = pd.to_numeric(data[column], errors="coerce")
+
+        data = data.dropna(subset=required)
+        data = data[
+            (data["Close"] > 0) & (data["Open"] > 0)
+        ]
+
+        data = (
+            data.sort_values("Date")
+            .drop_duplicates(subset=["Date"], keep="last")
+            .reset_index(drop=True)
+        )
+
+        if len(data) >= 100:
+            app.logger.info(
+                "Loaded %d records for %s from Spark/HDFS",
+                len(data),
+                company,
+            )
+            return data
+
+        app.logger.warning(
+            "Insufficient HDFS records for %s; trying Yahoo Finance",
+            company,
+        )
+
+    except Exception:
+        app.logger.exception(
+            "Failed to load data from Spark/HDFS for %s",
+            company,
+        )
+
+    # Fallback: preserve the original Yahoo Finance data source.
+    try:
+        ticker = TICKERS[company]
+
         data = yf.download(
             ticker,
             period="2y",
@@ -47,7 +99,6 @@ def get_company_data(company):
         if data is None or data.empty:
             return None
 
-        # Handle MultiIndex columns returned by some yfinance versions.
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
 
@@ -63,53 +114,31 @@ def get_company_data(company):
         ]
 
         if not all(column in data.columns for column in required):
-            app.logger.error(
-                "Yahoo Finance response missing required columns for %s",
-                company,
-            )
             return None
 
         data = data[required].copy()
-        data["Date"] = pd.to_datetime(
-            data["Date"],
-            errors="coerce",
-        )
+        data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
 
         for column in ["Open", "High", "Low", "Close", "Volume"]:
-            data[column] = pd.to_numeric(
-                data[column],
-                errors="coerce",
-            )
+            data[column] = pd.to_numeric(data[column], errors="coerce")
 
-        data = data.dropna(
-            subset=[
-                "Date",
-                "Open",
-                "High",
-                "Low",
-                "Close",
-                "Volume",
-            ]
-        )
-
+        data = data.dropna(subset=required)
         data = data[
-            (data["Close"] > 0)
-            & (data["Open"] > 0)
+            (data["Close"] > 0) & (data["Open"] > 0)
         ]
 
         return (
             data.sort_values("Date")
-            .drop_duplicates("Date", keep="last")
+            .drop_duplicates(subset=["Date"], keep="last")
             .reset_index(drop=True)
         )
 
     except Exception:
         app.logger.exception(
-            "Failed to retrieve stock data from Yahoo Finance for %s",
+            "Failed to retrieve stock data for %s",
             company,
         )
         return None
-
 
 def json_safe(value):
     """Convert NumPy and Pandas values into JSON-compatible values."""
@@ -427,4 +456,3 @@ def compare_company_models(company):
 
 if __name__ == "__main__":
     app.run(debug=True)
-```

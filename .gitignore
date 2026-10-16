@@ -4,3 +4,12 @@ __pycache__/
 .env
 
 oracle/testing/
+
+#local backups
+*.backup
+app.py.backup
+
+data/spark_raw/
+
+#generates spark output
+spark-warehouse/
