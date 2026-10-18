@@ -1,6 +1,14 @@
+<<<<<<< HEAD
+=======
+
+>>>>>>> fc25e58 (Update stock prediction models and dashboard)
 Flask>=3.0
 yfinance>=0.2.50
 numpy>=1.26
 pandas>=2.2
 scikit-learn>=1.5
+<<<<<<< HEAD
 pyspark==3.5.7
+=======
+
+>>>>>>> fc25e58 (Update stock prediction models and dashboard)

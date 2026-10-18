@@ -1,4 +1,3 @@
- 
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -137,7 +136,7 @@
                         <select id="modelSelect">
                             <option value="random_forest">Random Forest</option>
                             <option value="hist_gradient_boosting">HistGradientBoosting</option>
-                            <option value="linear_regression">Linear Regression</option>
+                            <option value="linear_regression">Ridge Regression</option>
                             <option value="knn">KNN Regressor</option>
                             <option value="svr">Support Vector Regression</option>
                         </select>
@@ -241,7 +240,7 @@
                     <article class="metric-card">
                         <p class="metric-label">Baseline directional accuracy</p>
                         <h3 id="baselineDirectionalAccuracy">—</h3>
-                        <p class="metric-footnote">Previous-close baseline</p>
+                        <p class="metric-footnote">Always predict up</p>
                     </article>
                 </div>
 
@@ -288,20 +287,22 @@
                                 <tr>
                                     <th>Model</th>
                                     <th>Estimated price</th>
-                                    <th>MAE</th>
-                                    <th>RMSE</th>
-                                    <th>Baseline MAE</th>
-                                    <th>Baseline RMSE</th>
-                                    <th>Direction accuracy</th>
+                                    <th>Holdout MAE</th>
+                                    <th>Holdout RMSE</th>
+                                    <th>Holdout baseline MAE</th>
+                                    <th>Holdout baseline RMSE</th>
+                                    <th>Holdout direction</th>
                                     <th>Walk-Forward MAE</th>
                                     <th>Walk-Forward RMSE</th>
-                                    <th>WF Direction Accuracy</th>
-                                    <th>Beats Baseline?</th>
+                                    <th>WF baseline MAE</th>
+                                    <th>WF baseline RMSE</th>
+                                    <th>WF direction</th>
+                                    <th>Beats baseline? (WF)</th>
                                 </tr>
                             </thead>
                             <tbody id="comparisonTableBody">
                                 <tr>
-                                    <td colspan="11">
+                                    <td colspan="13">
                                         Select “Compare models” to load results.
                                     </td>
                                 </tr>
@@ -312,17 +313,17 @@
 
                 <p class="muted-text table-note">
                     WF means walk-forward. This evaluates models across chronological
-                    validation windows. Lower MAE and RMSE are better; higher directional
-                    accuracy is better. “Beats Baseline?” indicates whether the model
-                    improves on the previous-close baseline according to the backend's
-                    comparison logic.
+                    validation windows, and the baseline is scored on exactly the same
+                    days. Lower MAE and RMSE are better. “Beats baseline?” uses the
+                    walk-forward results and a Diebold-Mariano test: “significant”
+                    means the improvement is unlikely to be luck (p &lt; 0.05).
                 </p>
 
                 <div class="section-heading subsection-heading">
                     <div>
                         <h3>Model error comparison</h3>
                         <p class="section-description">
-                            Compare each model's holdout MAE against the baseline MAE.
+                            Compare each model's walk-forward MAE against the baseline MAE.
                         </p>
                     </div>
                 </div>

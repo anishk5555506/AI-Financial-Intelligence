@@ -24,9 +24,11 @@ function setText(id, value) {
 
 function formatPrice(value) {
     const number = Number(value);
-    if (!Number.isFinite(number)) {
+
+    if (value === null || value === undefined || !Number.isFinite(number)) {
         return "—";
     }
+
     return "$" + number.toLocaleString("en-US", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
@@ -35,9 +37,11 @@ function formatPrice(value) {
 
 function formatNumber(value, digits = 2) {
     const number = Number(value);
-    if (!Number.isFinite(number)) {
+
+    if (value === null || value === undefined || !Number.isFinite(number)) {
         return "—";
     }
+
     return number.toLocaleString("en-US", {
         minimumFractionDigits: digits,
         maximumFractionDigits: digits
@@ -46,21 +50,33 @@ function formatNumber(value, digits = 2) {
 
 function formatPercent(value, digits = 2) {
     const number = Number(value);
-    if (!Number.isFinite(number)) {
+
+    if (value === null || value === undefined || !Number.isFinite(number)) {
         return "—";
     }
+
     return `${number >= 0 ? "+" : ""}${number.toFixed(digits)}%`;
 }
 
 function formatMetric(value, digits = 2) {
-    if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === "" ||
+        !Number.isFinite(Number(value))
+    ) {
         return "—";
     }
-    return numberFormat.format(Number(value));
+
+    return Number(value).toLocaleString("en-US", {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits
+    });
 }
 
 function setMetricColor(id, value) {
     const element = $(id);
+
     if (!element) {
         return;
     }
@@ -68,6 +84,7 @@ function setMetricColor(id, value) {
     element.classList.remove("positive", "negative", "neutral");
 
     const number = Number(value);
+
     if (!Number.isFinite(number)) {
         element.classList.add("neutral");
     } else if (number > 0) {
@@ -81,6 +98,7 @@ function setMetricColor(id, value) {
 
 function setStatus(id, message, type = "") {
     const element = $(id);
+
     if (!element) {
         return;
     }
@@ -95,18 +113,25 @@ function setStatus(id, message, type = "") {
 
 async function fetchJSON(url) {
     const response = await fetch(url, {
-        headers: { "Accept": "application/json" }
+        headers: {
+            Accept: "application/json"
+        }
     });
 
     let payload;
+
     try {
         payload = await response.json();
     } catch {
-        throw new Error(`The server returned an invalid response (${response.status}).`);
+        throw new Error(
+            `The server returned an invalid response (${response.status}).`
+        );
     }
 
     if (!response.ok) {
-        throw new Error(payload.error || `Request failed (${response.status}).`);
+        throw new Error(
+            payload.error || `Request failed (${response.status}).`
+        );
     }
 
     return payload;
@@ -158,6 +183,7 @@ function commonChartOptions(yTitle = "") {
 
 function makeLineChart(canvasId, labels, datasets, yTitle = "") {
     const canvas = $(canvasId);
+
     if (!canvas) {
         return null;
     }
@@ -174,9 +200,13 @@ function makeLineChart(canvasId, labels, datasets, yTitle = "") {
 
 function makeBarChart(canvasId, labels, datasets, yTitle = "") {
     const canvas = $(canvasId);
+
     if (!canvas) {
         return null;
     }
+
+    const options = commonChartOptions(yTitle);
+    options.scales.y.beginAtZero = true;
 
     return new Chart(canvas, {
         type: "bar",
@@ -184,23 +214,24 @@ function makeBarChart(canvasId, labels, datasets, yTitle = "") {
             labels,
             datasets
         },
-        options: {
-            ...commonChartOptions(yTitle),
-            scales: {
-                ...commonChartOptions(yTitle).scales,
-                y: {
-                    ...commonChartOptions(yTitle).scales.y,
-                    beginAtZero: true
-                }
-            }
-        }
+        options
     });
 }
 
 async function loadCompanyData() {
-    currentCompany = $("companySelect").value;
+    const companySelect = $("companySelect");
 
-    setStatus("globalStatus", `Loading ${currentCompany} market data...`, "loading");
+    if (!companySelect) {
+        return;
+    }
+
+    currentCompany = companySelect.value;
+
+    setStatus(
+        "globalStatus",
+        `Loading ${currentCompany} market data...`,
+        "loading"
+    );
 
     try {
         const data = await fetchJSON(
@@ -215,32 +246,45 @@ async function loadCompanyData() {
 
         setMetricColor("dailyChange", data.price_change);
         setMetricColor("dailyChangePct", data.percentage_change);
+
         setMetricColor(
             "marketTrend",
-            data.trend === "Positive" ? 1 :
-                data.trend === "Negative" ? -1 : 0
+            data.trend === "Positive"
+                ? 1
+                : data.trend === "Negative"
+                    ? -1
+                    : 0
         );
+
+        const dates = data.dates || [];
 
         setText(
             "lastUpdated",
-            `Latest available date: ${data.dates[data.dates.length - 1] || "—"}`
+            `Latest available date: ${dates[dates.length - 1] || "—"}`
         );
 
         destroyChart(priceChart);
+
         priceChart = makeLineChart(
             "priceChart",
-            data.dates,
-            [{
-                label: `${currentCompany} closing price`,
-                data: data.prices,
-                borderWidth: 2,
-                pointRadius: 0,
-                tension: 0.15
-            }],
+            dates,
+            [
+                {
+                    label: `${currentCompany} closing price`,
+                    data: data.prices || [],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.15
+                }
+            ],
             "Price (USD)"
         );
 
-        setStatus("globalStatus", `${currentCompany} data loaded successfully.`, "success");
+        setStatus(
+            "globalStatus",
+            `${currentCompany} data loaded successfully.`,
+            "success"
+        );
 
         await Promise.allSettled([
             loadRiskData(),
@@ -264,12 +308,14 @@ function renderHorizonForecasts(horizons) {
             key: "5_day",
             priceId: "forecast5Price",
             returnId: "forecast5Return",
+            dateId: "forecast5Date",
             fallbackDate: "Five trading days ahead"
         },
         {
             key: "10_day",
             priceId: "forecast10Price",
             returnId: "forecast10Return",
+            dateId: "forecast10Date",
             fallbackDate: "Ten trading days ahead"
         }
     ];
@@ -280,13 +326,16 @@ function renderHorizonForecasts(horizons) {
         if (!result) {
             setText(card.priceId, "—");
             setText(card.returnId, "—");
+
             if (card.dateId) {
                 setText(card.dateId, card.fallbackDate);
             }
+
             return;
         }
 
         setText(card.priceId, formatPrice(result.predicted_price));
+
         setText(
             card.returnId,
             `${formatPercent(result.predicted_return_pct)} estimated return`
@@ -295,7 +344,10 @@ function renderHorizonForecasts(horizons) {
         setMetricColor(card.returnId, result.predicted_return_pct);
 
         if (card.dateId) {
-            setText(card.dateId, result.horizon_label || card.fallbackDate);
+            setText(
+                card.dateId,
+                result.horizon_label || card.fallbackDate
+            );
         }
     });
 }
@@ -364,10 +416,21 @@ function renderPredictionEvaluation(data) {
 }
 
 async function loadPrediction() {
-    currentCompany = $("companySelect").value;
-    currentModel = $("modelSelect").value;
+    const companySelect = $("companySelect");
+    const modelSelect = $("modelSelect");
 
-    setStatus("predictionStatus", "Training models and generating forecasts...", "loading");
+    if (!companySelect || !modelSelect) {
+        return;
+    }
+
+    currentCompany = companySelect.value;
+    currentModel = modelSelect.value;
+
+    setStatus(
+        "predictionStatus",
+        "Training models and generating forecasts...",
+        "loading"
+    );
 
     if ($("predictButton")) {
         $("predictButton").disabled = true;
@@ -402,39 +465,93 @@ async function loadPrediction() {
 
 function renderComparisonTable(results) {
     const body = $("comparisonTableBody");
+
     if (!body) {
+        console.error(
+            'Comparison table body not found. Check for id="comparisonTableBody" in index.html.'
+        );
+
+        setStatus(
+            "comparisonStatus",
+            "Comparison table could not be found in index.html.",
+            "error"
+        );
+
         return;
     }
 
     body.replaceChildren();
 
+    const columnCount = 13;
+
     if (!Array.isArray(results) || results.length === 0) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
-        cell.colSpan = 6;
+
+        cell.colSpan = columnCount;
         cell.textContent = "No model results are available.";
+
         row.appendChild(cell);
         body.appendChild(row);
+
         return;
     }
 
     results.forEach((result) => {
         const row = document.createElement("tr");
+        const wf = result.walk_forward || {};
+
+        // Verdict uses WALK-FORWARD results (many more test days than the holdout)
+        let verdict = "—";
+
+        if (typeof wf.beats_baseline === "boolean") {
+            if (!wf.beats_baseline) {
+                verdict = "No";
+            } else if (wf.dm_p_value != null && wf.dm_p_value < 0.05) {
+                verdict = "Yes (significant)";
+            } else {
+                verdict = "Yes (not significant)";
+            }
+        }
+
+        const pct = (v) => (v == null ? "—" : `${formatMetric(v)}%`);
 
         const values = [
-            result.model_name,
+            result.model_name || result.model_id || "Unknown model",
             formatPrice(result.predicted_price),
             formatMetric(result.mae),
             formatMetric(result.rmse),
             formatMetric(result.baseline_mae),
-            result.directional_accuracy == null
-                ? "—"
-                : `${formatMetric(result.directional_accuracy)}%`
+            formatMetric(result.baseline_rmse),
+            pct(result.directional_accuracy),
+            formatMetric(wf.mae),
+            formatMetric(wf.rmse),
+            formatMetric(wf.baseline_mae),
+            formatMetric(wf.baseline_rmse),
+            pct(wf.directional_accuracy),
+            verdict
         ];
 
-        values.forEach((value) => {
+        values.forEach((value, index) => {
             const cell = document.createElement("td");
+
             cell.textContent = value;
+            cell.dataset.column = String(index + 1);
+
+            if (index === 0) {
+                cell.classList.add("model-name-cell");
+            }
+
+            if (index === 12) {
+                cell.classList.add(
+                    value.startsWith("Yes")
+                        ? "positive"
+                        : value === "No"
+                            ? "negative"
+                            : "neutral"
+                );
+            }
+
             row.appendChild(cell);
         });
 
@@ -443,9 +560,19 @@ function renderComparisonTable(results) {
 }
 
 async function loadModelComparison() {
-    currentCompany = $("companySelect").value;
+    const companySelect = $("companySelect");
 
-    setStatus("comparisonStatus", "Comparing all models...", "loading");
+    if (!companySelect) {
+        return;
+    }
+
+    currentCompany = companySelect.value;
+
+    setStatus(
+        "comparisonStatus",
+        "Comparing all models (the first run can take a minute)...",
+        "loading"
+    );
 
     if ($("compareButton")) {
         $("compareButton").disabled = true;
@@ -456,7 +583,9 @@ async function loadModelComparison() {
             `/api/compare/${encodeURIComponent(currentCompany)}`
         );
 
-        const results = data.results || [];
+        const results = Array.isArray(data.results)
+            ? data.results
+            : [];
 
         renderComparisonTable(results);
 
@@ -464,15 +593,21 @@ async function loadModelComparison() {
 
         comparisonChart = makeBarChart(
             "comparisonChart",
-            results.map((result) => result.model_name),
+            results.map(
+                (result) => result.model_name || result.model_id
+            ),
             [
                 {
-                    label: "Model MAE",
-                    data: results.map((result) => result.mae)
+                    label: "Model MAE (walk-forward)",
+                    data: results.map(
+                        (r) => r.walk_forward?.mae ?? null
+                    )
                 },
                 {
-                    label: "Baseline MAE",
-                    data: results.map((result) => result.baseline_mae)
+                    label: "Baseline MAE (walk-forward)",
+                    data: results.map(
+                        (r) => r.walk_forward?.baseline_mae ?? null
+                    )
                 }
             ],
             "Mean absolute error"
@@ -493,62 +628,102 @@ async function loadModelComparison() {
 }
 
 async function loadRiskData() {
-    currentCompany = $("companySelect").value;
+    const companySelect = $("companySelect");
 
-    setStatus("riskStatus", "Calculating historical risk metrics...", "loading");
+    if (!companySelect) {
+        return;
+    }
+
+    currentCompany = companySelect.value;
+
+    setStatus(
+        "riskStatus",
+        "Calculating historical risk metrics...",
+        "loading"
+    );
 
     try {
         const data = await fetchJSON(
             `/api/risk/${encodeURIComponent(currentCompany)}`
         );
 
-        setText("cumulativeReturn", formatPercent(data.cumulative_return_pct));
+        setText(
+            "cumulativeReturn",
+            formatPercent(data.cumulative_return_pct)
+        );
+
         setText(
             "annualizedVolatility",
             `${formatMetric(data.annualized_volatility_pct)}%`
         );
+
         setText(
             "maximumDrawdown",
             formatPercent(data.maximum_drawdown_pct)
         );
-        setText("sharpeRatio", formatMetric(data.sharpe_ratio, 3));
 
-        setMetricColor("cumulativeReturn", data.cumulative_return_pct);
-        setMetricColor("maximumDrawdown", data.maximum_drawdown_pct);
+        setText(
+            "sharpeRatio",
+            formatMetric(data.sharpe_ratio, 3)
+        );
+
+        setMetricColor(
+            "cumulativeReturn",
+            data.cumulative_return_pct
+        );
+
+        setMetricColor(
+            "maximumDrawdown",
+            data.maximum_drawdown_pct
+        );
 
         const dates = data.dates || [];
 
         destroyChart(cumulativeReturnChart);
+
         cumulativeReturnChart = makeLineChart(
             "cumulativeReturnChart",
             dates,
-            [{
-                label: "Cumulative return",
-                data: data.cumulative_returns || [],
-                borderWidth: 2,
-                pointRadius: 0,
-                tension: 0.05
-            }],
+            [
+                {
+                    label: "Cumulative return",
+                    data: data.cumulative_returns || [],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.05
+                }
+            ],
             "Return (%)"
         );
 
         destroyChart(drawdownChart);
+
         drawdownChart = makeLineChart(
             "drawdownChart",
             dates,
-            [{
-                label: "Drawdown",
-                data: data.drawdowns || [],
-                borderWidth: 2,
-                pointRadius: 0,
-                tension: 0.05
-            }],
+            [
+                {
+                    label: "Drawdown",
+                    data: data.drawdowns || [],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.05
+                }
+            ],
             "Drawdown (%)"
         );
 
-        setText("riskNote", data.note || "Historical risk metrics do not guarantee future results.");
+        setText(
+            "riskNote",
+            data.note ||
+                "Historical risk metrics do not guarantee future results."
+        );
 
-        setStatus("riskStatus", `Risk analysis updated for ${currentCompany}.`, "success");
+        setStatus(
+            "riskStatus",
+            `Risk analysis updated for ${currentCompany}.`,
+            "success"
+        );
     } catch (error) {
         setStatus("riskStatus", error.message, "error");
     }
@@ -559,11 +734,30 @@ async function refreshDashboard() {
 }
 
 function setupEventListeners() {
-    $("companySelect")?.addEventListener("change", refreshDashboard);
-    $("refreshButton")?.addEventListener("click", refreshDashboard);
-    $("predictButton")?.addEventListener("click", loadPrediction);
-    $("compareButton")?.addEventListener("click", loadModelComparison);
-    $("riskButton")?.addEventListener("click", loadRiskData);
+    $("companySelect")?.addEventListener(
+        "change",
+        refreshDashboard
+    );
+
+    $("refreshButton")?.addEventListener(
+        "click",
+        refreshDashboard
+    );
+
+    $("predictButton")?.addEventListener(
+        "click",
+        loadPrediction
+    );
+
+    $("compareButton")?.addEventListener(
+        "click",
+        loadModelComparison
+    );
+
+    $("riskButton")?.addEventListener(
+        "click",
+        loadRiskData
+    );
 
     $("modelSelect")?.addEventListener("change", () => {
         currentModel = $("modelSelect").value;
@@ -575,6 +769,7 @@ function setupEventListeners() {
             document.querySelectorAll(".nav-link").forEach((item) => {
                 item.classList.remove("active");
             });
+
             link.classList.add("active");
         });
     });

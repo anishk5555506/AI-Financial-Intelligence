@@ -1,5 +1,6 @@
 from flask import Flask, render_template, jsonify, request
 import logging
+import time
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,7 @@ from model import (
     compare_models,
 )
 from spark_data import get_stock_data
+
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
 
@@ -25,14 +27,66 @@ TICKERS = {
 TRADING_DAYS = 252
 DEFAULT_RISK_FREE_RATE = 0.04
 
-def get_company_data(company):
-    """Load historical OHLCV data from Spark/HDFS, with Yahoo Finance fallback."""
+MODEL_PERIOD = "10y"
+DISPLAY_PERIOD = "2y"
+CACHE_SECONDS = 3600
+CONTEXT_SYMBOLS = {
+    "SPX_Close": "^GSPC",
+    "VIX_Close": "^VIX",
+}
 
+_cache = {}
+
+
+def cached(key, builder):
+    hit = _cache.get(key)
+
+    if hit and time.time() - hit[0] < CACHE_SECONDS:
+        return hit[1]
+
+    value = builder()
+
+    if value is not None:
+        _cache[key] = (time.time(), value)
+
+    return value
+
+
+def download_close_series(symbol, period):
+    try:
+        raw = yf.download(
+            symbol,
+            period=period,
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+        )
+
+        if raw is None or raw.empty:
+            return None
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = raw.columns.get_level_values(0)
+
+        series = pd.to_numeric(raw["Close"], errors="coerce")
+        series.index = pd.to_datetime(series.index)
+
+        return series.dropna()
+
+    except Exception:
+        app.logger.exception(
+            "Failed to download context series %s",
+            symbol,
+        )
+        return None
+
+
+def get_company_data(company, period=DISPLAY_PERIOD, with_context=False):
     if company not in TICKERS:
         return None
 
     try:
-        # Primary source: historical data processed by Spark and stored in HDFS.
         data = get_stock_data(company)
 
         required = [
@@ -64,12 +118,42 @@ def get_company_data(company):
             .reset_index(drop=True)
         )
 
-        if len(data) >= 100:
+        if len(data) >= 100 and not with_context:
             app.logger.info(
                 "Loaded %d records for %s from Spark/HDFS",
                 len(data),
                 company,
             )
+            data = data.tail(
+                10000
+            ).reset_index(drop=True)
+            return data
+
+        if len(data) >= 100 and with_context:
+            data = data.tail(
+                10000
+            ).reset_index(drop=True)
+
+            if period == MODEL_PERIOD:
+                data = data.tail(2520).reset_index(drop=True)
+
+            for column, symbol in CONTEXT_SYMBOLS.items():
+                series = download_close_series(symbol, period)
+
+                if series is not None:
+                    context = (
+                        series.rename(column)
+                        .rename_axis("Date")
+                        .reset_index()
+                    )
+                    context["Date"] = pd.to_datetime(context["Date"])
+                    data = data.merge(
+                        context,
+                        on="Date",
+                        how="left",
+                    )
+                    data[column] = data[column].ffill()
+
             return data
 
         app.logger.warning(
@@ -83,13 +167,12 @@ def get_company_data(company):
             company,
         )
 
-    # Fallback: preserve the original Yahoo Finance data source.
     try:
         ticker = TICKERS[company]
 
         data = yf.download(
             ticker,
-            period="2y",
+            period=period,
             interval="1d",
             auto_adjust=True,
             progress=False,
@@ -127,11 +210,31 @@ def get_company_data(company):
             (data["Close"] > 0) & (data["Open"] > 0)
         ]
 
-        return (
+        data = (
             data.sort_values("Date")
             .drop_duplicates(subset=["Date"], keep="last")
             .reset_index(drop=True)
         )
+
+        if with_context:
+            for column, symbol in CONTEXT_SYMBOLS.items():
+                series = download_close_series(symbol, period)
+
+                if series is not None:
+                    context = (
+                        series.rename(column)
+                        .rename_axis("Date")
+                        .reset_index()
+                    )
+                    context["Date"] = pd.to_datetime(context["Date"])
+                    data = data.merge(
+                        context,
+                        on="Date",
+                        how="left",
+                    )
+                    data[column] = data[column].ffill()
+
+        return data
 
     except Exception:
         app.logger.exception(
@@ -140,8 +243,21 @@ def get_company_data(company):
         )
         return None
 
+
+def get_model_data(company):
+    data = cached(
+        ("model_data", company),
+        lambda: get_company_data(
+            company,
+            period=MODEL_PERIOD,
+            with_context=True,
+        ),
+    )
+
+    return None if data is None else data.copy()
+
+
 def json_safe(value):
-    """Convert NumPy and Pandas values into JSON-compatible values."""
     if isinstance(value, dict):
         return {
             str(key): json_safe(item)
@@ -192,7 +308,10 @@ def get_company_data_api(company):
     if company not in TICKERS:
         return jsonify({"error": "Company not found."}), 404
 
-    data = get_company_data(company)
+    data = cached(
+        ("display_data", company),
+        lambda: get_company_data(company, period=DISPLAY_PERIOD),
+    )
 
     if data is None or data.empty:
         return jsonify({
@@ -242,7 +361,10 @@ def calculate_risk(company):
     if company not in TICKERS:
         return jsonify({"error": "Company not found."}), 404
 
-    data = get_company_data(company)
+    data = cached(
+        ("risk_data", company),
+        lambda: get_company_data(company, period=DISPLAY_PERIOD),
+    )
 
     if data is None or len(data) < 30:
         return jsonify({
@@ -342,7 +464,7 @@ def predict_company(company):
             "error": "Unknown model selected."
         }), 400
 
-    data = get_company_data(company)
+    data = get_model_data(company)
 
     if data is None or len(data) < 100:
         return jsonify({
@@ -355,10 +477,12 @@ def predict_company(company):
             "all",
         ).lower()
 
+        last_date = str(data["Date"].iloc[-1])
+
         if horizon_arg == "all":
-            horizon_results = predict_all_horizons(
-                data,
-                model_id,
+            horizon_results = cached(
+                ("predict", company, model_id, last_date),
+                lambda: predict_all_horizons(data, model_id),
             )
             primary = horizon_results["1_day"]
 
@@ -428,7 +552,7 @@ def compare_company_models(company):
     if company not in TICKERS:
         return jsonify({"error": "Company not found."}), 404
 
-    data = get_company_data(company)
+    data = get_model_data(company)
 
     if data is None or len(data) < 100:
         return jsonify({
@@ -436,7 +560,10 @@ def compare_company_models(company):
         }), 502
 
     try:
-        results = compare_models(data)
+        results = cached(
+            ("compare", company, str(data["Date"].iloc[-1])),
+            lambda: compare_models(data),
+        )
 
         return jsonify(json_safe({
             "company": company,
