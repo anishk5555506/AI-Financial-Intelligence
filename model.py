@@ -24,7 +24,10 @@ MODELS = {
     "svr": "Support Vector Regression",
 }
 
-HORIZONS = (1, 5, 10)
+HORIZONS = (1, 5, 10)            # price and range forecasts (trading days)
+VOL_HORIZONS = (5, 10, 20)       # volatility forecasts (trading days)
+
+ANNUALIZATION = np.sqrt(252) * 100   # daily log-return -> annualized %
 
 BASE_FEATURES = [
     "Return_1D", "Return_2D", "Return_3D", "Return_5D",
@@ -41,15 +44,25 @@ BASE_FEATURES = [
     "High_vs_20D", "Low_vs_20D",
 ]
 
-# Added only when app.py supplies SPX_Close / VIX_Close columns.
-MARKET_FEATURES = [
-    "SPX_Return_1D", "SPX_Return_5D",
-    "VIX_Level", "VIX_Change", "VIX_vs_MA20",
-]
-
 WF_TEST_SIZE = 60      # each walk-forward fold tests on ~3 months
 WF_MAX_SPLITS = 8
 WF_MIN_TRAIN = 120
+
+# Prediction ranges
+RANGE_LEVEL = 0.90                    # 90% range
+LO_Q = (1 - RANGE_LEVEL) / 2          # 5th percentile
+HI_Q = 1 - LO_Q                       # 95th percentile
+METHOD_NAMES = {
+    "ml": "Quantile Gradient Boosting",
+    "vol_scaled": "Volatility-scaled history",
+}
+
+
+def _horizon_label(horizon):
+    return (
+        "next trading day" if horizon == 1
+        else f"{horizon} trading days"
+    )
 
 
 # --------------------------------------------------
@@ -80,7 +93,6 @@ def create_model(model_id):
         )
 
     if model_id == "linear_regression":
-        # Plain OLS on ~35 correlated features overfits badly.
         return make_pipeline(
             StandardScaler(),
             Ridge(alpha=100.0),
@@ -96,9 +108,6 @@ def create_model(model_id):
         )
 
     if model_id == "svr":
-        # Targets are tiny log-returns (~0.01), so epsilon=0.001 made
-        # almost every row a support vector. Scaling y puts C/epsilon
-        # on a sensible scale.
         return TransformedTargetRegressor(
             regressor=make_pipeline(
                 StandardScaler(),
@@ -108,6 +117,20 @@ def create_model(model_id):
         )
 
     raise ValueError(f"Unknown model: {model_id}")
+
+
+def create_quantile_model(quantile):
+    """Gradient boosting trained to predict one percentile of the outcome."""
+    return HistGradientBoostingRegressor(
+        loss="quantile",
+        quantile=quantile,
+        max_iter=100,
+        max_depth=2,
+        learning_rate=0.05,
+        min_samples_leaf=50,
+        l2_regularization=2.0,
+        random_state=42,
+    )
 
 
 # --------------------------------------------------
@@ -139,13 +162,14 @@ def _rsi(close, period=14):
 
 
 # --------------------------------------------------
-# FEATURE ENGINEERING AND DATA PREPARATION
+# FEATURE ENGINEERING (shared by price, range and volatility models)
 # --------------------------------------------------
 
-def prepare_data(data, horizon=1):
-
-    if horizon not in HORIZONS:
-        raise ValueError(f"Horizon must be one of {HORIZONS}.")
+def _build_features(data):
+    """
+    Returns (df, base_columns, volatility_columns).
+    Every feature on row t only uses data up to the close of day t.
+    """
 
     if data is None or data.empty:
         raise ValueError("No historical data was supplied.")
@@ -242,27 +266,72 @@ def prepare_data(data, horizon=1):
     df["Low_vs_20D"] = close / df["Low"].rolling(20).min() - 1
 
     # Market context (optional)
-    feature_columns = list(BASE_FEATURES)
+    base_columns = list(BASE_FEATURES)
+    has_spx = (
+        "SPX_Close" in df.columns and df["SPX_Close"].notna().mean() > 0.9
+    )
+    has_vix = (
+        "VIX_Close" in df.columns and df["VIX_Close"].notna().mean() > 0.9
+    )
 
-    if "SPX_Close" in df.columns and df["SPX_Close"].notna().mean() > 0.9:
+    if has_spx:
         spx = df["SPX_Close"]
         df["SPX_Return_1D"] = spx.pct_change(1)
         df["SPX_Return_5D"] = spx.pct_change(5)
-        feature_columns += ["SPX_Return_1D", "SPX_Return_5D"]
+        base_columns += ["SPX_Return_1D", "SPX_Return_5D"]
 
-    if "VIX_Close" in df.columns and df["VIX_Close"].notna().mean() > 0.9:
+    if has_vix:
         vix = df["VIX_Close"]
         df["VIX_Level"] = vix / 100.0
         df["VIX_Change"] = vix.pct_change(1)
         df["VIX_vs_MA20"] = vix / vix.rolling(20).mean() - 1
-        feature_columns += ["VIX_Level", "VIX_Change", "VIX_vs_MA20"]
+        base_columns += ["VIX_Level", "VIX_Change", "VIX_vs_MA20"]
 
-    # Future target
+    # Extra features used only by the volatility models
+    log_returns = np.log(close).diff()
+    squared = log_returns ** 2
+    volatility_columns = []
+
+    for window in (5, 10, 20, 60):
+        realized = np.sqrt(squared.rolling(window).mean()) * ANNUALIZATION
+        df[f"LogRV_{window}"] = np.log(realized.clip(lower=1e-4))
+        volatility_columns.append(f"LogRV_{window}")
+
+    df["Abs_Ret_1D"] = log_returns.abs() * 100
+    df["Abs_Ret_Lag_1"] = df["Abs_Ret_1D"].shift(1)
+    df["Range_MA5"] = df["Intraday_Range"].rolling(5).mean()
+    df["Range_MA20"] = df["Intraday_Range"].rolling(20).mean()
+    volatility_columns += [
+        "Abs_Ret_1D", "Abs_Ret_Lag_1", "Range_MA5", "Range_MA20",
+    ]
+
+    if has_spx:
+        spx_log = np.log(df["SPX_Close"]).diff()
+        spx_rv = np.sqrt((spx_log ** 2).rolling(20).mean()) * ANNUALIZATION
+        df["SPX_LogRV_20"] = np.log(spx_rv.clip(lower=1e-4))
+        volatility_columns.append("SPX_LogRV_20")
+
+    all_columns = base_columns + volatility_columns
+    df[all_columns] = df[all_columns].replace([np.inf, -np.inf], np.nan)
+
+    return df, base_columns, volatility_columns
+
+
+# --------------------------------------------------
+# DATA PREPARATION: PRICE / RANGE MODELS
+# --------------------------------------------------
+
+def prepare_data(data, horizon=1):
+
+    if horizon not in HORIZONS:
+        raise ValueError(f"Horizon must be one of {HORIZONS}.")
+
+    df, feature_columns, _ = _build_features(data)
+    close = df["Close"]
+
     df["Target_Return"] = np.log(close.shift(-horizon) / close)
     df["Target_Price"] = close.shift(-horizon)
     df["Target_Date"] = df["Date"].shift(-horizon)
-
-    df[feature_columns] = df[feature_columns].replace([np.inf, -np.inf], np.nan)
 
     labeled = (
         df.dropna(
@@ -292,6 +361,59 @@ def prepare_data(data, horizon=1):
         latest_features.astype(float),
         float(close.iloc[-1]),
     )
+
+
+# --------------------------------------------------
+# DATA PREPARATION: VOLATILITY MODELS
+# --------------------------------------------------
+
+def prepare_vol_data(data, horizon=5):
+    """
+    Target: realized volatility over the NEXT `horizon` trading days
+            (annualized %), modelled in log space.
+    Baseline: realized volatility over the LAST `horizon` trading days.
+    """
+
+    if horizon not in VOL_HORIZONS:
+        raise ValueError(f"Volatility horizon must be one of {VOL_HORIZONS}.")
+
+    df, base_columns, vol_columns = _build_features(data)
+    feature_columns = base_columns + vol_columns
+
+    squared = np.log(df["Close"]).diff() ** 2
+    mean_squared = squared.rolling(horizon).mean()
+
+    df["Baseline_Vol"] = np.sqrt(mean_squared) * ANNUALIZATION
+    df["Target_Vol"] = np.sqrt(mean_squared.shift(-horizon)) * ANNUALIZATION
+    df["Target_LogVol"] = np.log(df["Target_Vol"].clip(lower=1e-4))
+    df["Target_Date"] = df["Date"].shift(-horizon)
+
+    labeled = (
+        df.dropna(
+            subset=feature_columns
+            + ["Baseline_Vol", "Target_LogVol", "Target_Date"]
+        )
+        .reset_index(drop=True)
+    )
+
+    if len(labeled) < 150:
+        raise ValueError(
+            "Not enough usable rows for volatility forecasting."
+        )
+
+    X = labeled[feature_columns].astype(float)
+    y = labeled["Target_LogVol"].astype(float)
+
+    latest_features = df.iloc[[-1]][feature_columns].copy()
+
+    if latest_features.isna().any(axis=None):
+        raise ValueError(
+            "Latest row does not have enough history to calculate indicators."
+        )
+
+    current_vol = float(df["Baseline_Vol"].iloc[-1])
+
+    return labeled, X, y, latest_features.astype(float), current_vol
 
 
 # --------------------------------------------------
@@ -325,9 +447,8 @@ def directional_accuracy(previous_closes, actual, predicted):
 
 def always_up_accuracy(previous_closes, actual):
     """
-    Direction benchmark. The old baseline (predict no change) has
-    sign(0) = 0, so it only scored on days with an unchanged close,
-    which is meaningless. 'Always predict up' is the honest benchmark.
+    Direction benchmark: 'always predict up'. (The old 'predict no change'
+    baseline scored only on days with an unchanged close.)
     """
     previous_closes = np.asarray(previous_closes, dtype=float)
     actual = np.asarray(actual, dtype=float)
@@ -349,7 +470,7 @@ def diebold_mariano_p(baseline_errors, model_errors, horizon=1):
     """
     One-sided Diebold-Mariano test on squared errors.
     Small p => the model's errors are genuinely lower than the baseline's.
-    Uses a Bartlett (Newey-West) correction for overlapping 5/10-day targets.
+    Uses a Bartlett (Newey-West) correction for overlapping targets.
     """
     e_base = np.asarray(baseline_errors, dtype=float)
     e_model = np.asarray(model_errors, dtype=float)
@@ -376,8 +497,13 @@ def diebold_mariano_p(baseline_errors, model_errors, horizon=1):
     return float(1 - norm.cdf(statistic))
 
 
+def _wf_split_count(n_rows, horizon, n_splits=WF_MAX_SPLITS):
+    gap = max(0, horizon - 1)
+    return min(n_splits, (n_rows - WF_MIN_TRAIN - gap) // WF_TEST_SIZE)
+
+
 # --------------------------------------------------
-# WALK-FORWARD VALIDATION
+# WALK-FORWARD VALIDATION (PRICE)
 # --------------------------------------------------
 
 EMPTY_WALK_FORWARD = {
@@ -411,11 +537,7 @@ def walk_forward_evaluation(
     """
 
     gap = max(0, horizon - 1)
-
-    splits = min(
-        n_splits,
-        (len(X) - WF_MIN_TRAIN - gap) // WF_TEST_SIZE,
-    )
+    splits = _wf_split_count(len(X), horizon, n_splits)
 
     if splits < 2:
         return dict(EMPTY_WALK_FORWARD)
@@ -459,9 +581,8 @@ def walk_forward_evaluation(
     metrics = calculate_metrics(actual_all, predicted_all)
     baseline_metrics = calculate_metrics(actual_all, previous_all)
 
-    # Significance tests (in return space so old prices don't dominate)
     dm_p = diebold_mariano_p(
-        baseline_errors=actual_ret_all,                      # predict 0 return
+        baseline_errors=actual_ret_all,
         model_errors=actual_ret_all - predicted_ret_all,
         horizon=horizon,
     )
@@ -501,7 +622,7 @@ def walk_forward_evaluation(
 
 
 # --------------------------------------------------
-# TRAIN MODEL AND GENERATE FORECAST
+# PRICE FORECASTS
 # --------------------------------------------------
 
 def train_model(data, model_id, horizon=1):
@@ -568,7 +689,6 @@ def train_model(data, model_id, horizon=1):
         horizon=horizon,
     )
 
-    # Final model: all labeled rows
     final_model = create_model(model_id)
     final_model.fit(X, y)
 
@@ -592,9 +712,7 @@ def train_model(data, model_id, horizon=1):
 
     return {
         "horizon": horizon,
-        "horizon_label": (
-            "next trading day" if horizon == 1 else f"{horizon} trading days"
-        ),
+        "horizon_label": _horizon_label(horizon),
         "model_name": MODELS[model_id],
         "predicted_price": round(predicted_price, 2),
         "predicted_return_pct": round(
@@ -625,10 +743,6 @@ def train_model(data, model_id, horizon=1):
     }
 
 
-# --------------------------------------------------
-# PREDICTIONS FOR ALL HORIZONS
-# --------------------------------------------------
-
 def predict_all_horizons(data, model_id):
 
     return {
@@ -637,18 +751,17 @@ def predict_all_horizons(data, model_id):
     }
 
 
-# --------------------------------------------------
-# COMPARE ALL FIVE MODELS
-# --------------------------------------------------
-
 def compare_models(data):
+    """
+    Compare all five models at every horizon (1, 5 and 10 days).
+    The page picks which horizon to display, so no re-training is needed
+    when the horizon dropdown changes.
+    """
 
     results = []
 
     for model_id, model_name in MODELS.items():
 
-        # One call per horizon. The 1-day result is reused below
-        # (the old code trained the 1-day model twice).
         all_horizons = predict_all_horizons(data, model_id)
         result = all_horizons["1_day"]
 
@@ -671,25 +784,441 @@ def compare_models(data):
             "walk_forward": result["walk_forward"],
             "horizons": {
                 key: {
+                    "horizon": value["horizon"],
+                    "horizon_label": value["horizon_label"],
                     "predicted_price": value["predicted_price"],
                     "predicted_return_pct": value["predicted_return_pct"],
                     "mae": value["mae"],
                     "rmse": value["rmse"],
                     "baseline_mae": value["baseline_mae"],
                     "baseline_rmse": value["baseline_rmse"],
+                    "mae_improvement_pct": value["mae_improvement_pct"],
+                    "rmse_improvement_pct": value["rmse_improvement_pct"],
+                    "test_samples": value["test_samples"],
                     "directional_accuracy": value["directional_accuracy"],
+                    "baseline_directional_accuracy": (
+                        value["baseline_directional_accuracy"]
+                    ),
                     "walk_forward": value["walk_forward"],
                 }
                 for key, value in all_horizons.items()
             },
         })
 
-    # Rank by walk-forward MAE (more samples than the holdout)
     def sort_key(item):
         wf = item["walk_forward"] or {}
         mae = wf.get("mae")
         return (mae if mae is not None else item["mae"], item["rmse"])
 
     results.sort(key=sort_key)
+
+    return results
+
+
+# --------------------------------------------------
+# PREDICTION RANGES
+# --------------------------------------------------
+
+def _sigma_scale(sigma, horizon):
+    """Expected size of a `horizon`-day move: daily vol x sqrt(days)."""
+    return np.clip(np.asarray(sigma, dtype=float), 1e-4, None) * np.sqrt(horizon)
+
+
+def _quantile_bounds(X_train, z_train, X_test):
+    """Fit lower/upper quantile models; return (lower, upper) predictions."""
+    lower_model = create_quantile_model(LO_Q).fit(X_train, z_train)
+    upper_model = create_quantile_model(HI_Q).fit(X_train, z_train)
+
+    lower = lower_model.predict(X_test)
+    upper = upper_model.predict(X_test)
+
+    # Guard against crossing quantiles
+    return np.minimum(lower, upper), np.maximum(lower, upper)
+
+
+def _interval_metrics(actual, lower, upper):
+
+    actual = np.asarray(actual, dtype=float)
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+
+    inside = (actual >= lower) & (actual <= upper)
+    alpha = 1 - RANGE_LEVEL
+
+    # Interval score: width plus a penalty for every miss (lower is better)
+    score = (
+        (upper - lower)
+        + (2 / alpha) * np.maximum(lower - actual, 0)
+        + (2 / alpha) * np.maximum(actual - upper, 0)
+    )
+
+    return {
+        "coverage": float(inside.mean() * 100),
+        "width_pct": float(np.mean(np.exp(upper) - np.exp(lower)) * 100),
+        "interval_score": float(score.mean() * 100),
+    }
+
+
+def _calibration_verdict(coverage):
+
+    if coverage is None:
+        return None
+
+    gap = coverage - RANGE_LEVEL * 100
+
+    if abs(gap) <= 3:
+        return "Well calibrated"
+
+    return "Too narrow" if gap < 0 else "Too wide"
+
+
+def range_walk_forward(X, y, sigma, horizon):
+    """
+    Walk-forward test of both range methods. Everything (quantile models,
+    historical percentiles) is fitted on the training window only.
+
+    Both methods work on 'standardized moves' z = return / (daily vol x
+    sqrt(days)), then scale back, so the range widens in volatile markets.
+    """
+
+    splits = _wf_split_count(len(X), horizon)
+
+    if splits < 2:
+        return None
+
+    gap = max(0, horizon - 1)
+    scale_all = _sigma_scale(sigma, horizon)
+    z_all = y.to_numpy(dtype=float) / scale_all
+
+    splitter = TimeSeriesSplit(
+        n_splits=splits,
+        test_size=WF_TEST_SIZE,
+        gap=gap,
+    )
+
+    indices = []
+    bounds = {"ml": ([], []), "vol_scaled": ([], [])}
+
+    for train_idx, test_idx in splitter.split(X):
+
+        scale_test = scale_all[test_idx]
+
+        # Method 1: quantile gradient boosting on standardized moves
+        lower_z, upper_z = _quantile_bounds(
+            X.iloc[train_idx], z_all[train_idx], X.iloc[test_idx]
+        )
+        bounds["ml"][0].extend(lower_z * scale_test)
+        bounds["ml"][1].extend(upper_z * scale_test)
+
+        # Method 2: historical percentiles of standardized moves
+        q_low, q_high = np.quantile(z_all[train_idx], [LO_Q, HI_Q])
+        bounds["vol_scaled"][0].extend(q_low * scale_test)
+        bounds["vol_scaled"][1].extend(q_high * scale_test)
+
+        indices.extend(test_idx)
+
+    return (
+        np.asarray(indices),
+        {
+            key: (np.asarray(lo), np.asarray(hi))
+            for key, (lo, hi) in bounds.items()
+        },
+        splits,
+    )
+
+
+def predict_ranges(data):
+    """90% price ranges for 1, 5 and 10 trading days."""
+
+    results = {}
+
+    for horizon in HORIZONS:
+
+        labeled, X, y, latest, current_close = prepare_data(
+            data, horizon=horizon
+        )
+
+        sigma = labeled["Volatility_20D"].to_numpy(dtype=float)
+        walk = range_walk_forward(X, y, sigma, horizon)
+
+        # ---- Fit on all history and forecast the next range ----
+        scale_all = _sigma_scale(sigma, horizon)
+        z_all = y.to_numpy(dtype=float) / scale_all
+
+        latest_scale = float(
+            _sigma_scale([latest["Volatility_20D"].iloc[0]], horizon)[0]
+        )
+
+        lower_z, upper_z = _quantile_bounds(X, z_all, latest)
+        q_low, q_high = np.quantile(z_all, [LO_Q, HI_Q])
+
+        forecast_bounds = {
+            "ml": (lower_z[0] * latest_scale, upper_z[0] * latest_scale),
+            "vol_scaled": (q_low * latest_scale, q_high * latest_scale),
+        }
+
+        # ---- Score each method on the walk-forward windows ----
+        methods = {}
+        actual_returns = None
+
+        if walk is not None:
+            idx, bounds, folds = walk
+            actual_returns = y.to_numpy(dtype=float)[idx]
+
+        for key, name in METHOD_NAMES.items():
+
+            lower_ret, upper_ret = forecast_bounds[key]
+
+            entry = {
+                "name": name,
+                "lower_price": round(
+                    float(current_close * np.exp(lower_ret)), 2
+                ),
+                "upper_price": round(
+                    float(current_close * np.exp(upper_ret)), 2
+                ),
+                "coverage": None,
+                "width_pct": None,
+                "interval_score": None,
+                "verdict": None,
+                "samples": 0,
+                "folds": 0,
+            }
+
+            if walk is not None:
+                lo, hi = bounds[key]
+                metrics = _interval_metrics(actual_returns, lo, hi)
+
+                entry.update({
+                    "coverage": round(metrics["coverage"], 2),
+                    "width_pct": round(metrics["width_pct"], 2),
+                    "interval_score": round(metrics["interval_score"], 3),
+                    "verdict": _calibration_verdict(metrics["coverage"]),
+                    "samples": int(len(idx)),
+                    "folds": int(folds),
+                })
+
+            methods[key] = entry
+
+        # ---- Headline method: whichever is better calibrated ----
+        if walk is not None:
+            headline = min(
+                methods,
+                key=lambda k: (
+                    abs(methods[k]["coverage"] - RANGE_LEVEL * 100),
+                    methods[k]["width_pct"],
+                ),
+            )
+        else:
+            headline = "vol_scaled"
+
+        evaluation = {"dates": [], "actual": [], "lower": [], "upper": []}
+
+        if walk is not None:
+            lo, hi = bounds[headline]
+            closes = labeled["Close"].to_numpy(dtype=float)[idx]
+
+            evaluation = {
+                "dates": (
+                    labeled["Target_Date"].iloc[idx]
+                    .dt.strftime("%Y-%m-%d").tolist()
+                ),
+                "actual": [
+                    round(float(v), 2)
+                    for v in labeled["Target_Price"].to_numpy(dtype=float)[idx]
+                ],
+                "lower": [round(float(v), 2) for v in closes * np.exp(lo)],
+                "upper": [round(float(v), 2) for v in closes * np.exp(hi)],
+            }
+
+        results[f"{horizon}_day"] = {
+            "horizon": horizon,
+            "horizon_label": _horizon_label(horizon),
+            "current_price": round(float(current_close), 2),
+            "range_level": int(RANGE_LEVEL * 100),
+            "headline_method": headline,
+            "headline_name": METHOD_NAMES[headline],
+            "lower_price": methods[headline]["lower_price"],
+            "upper_price": methods[headline]["upper_price"],
+            "width_pct": methods[headline]["width_pct"],
+            "methods": methods,
+            "evaluation": evaluation,
+        }
+
+    return results
+
+
+# --------------------------------------------------
+# VOLATILITY FORECASTS
+# --------------------------------------------------
+
+EMPTY_VOL_WALK_FORWARD = {
+    "mae": None,
+    "rmse": None,
+    "baseline_mae": None,
+    "baseline_rmse": None,
+    "mae_improvement_pct": None,
+    "dm_p_value": None,
+    "beats_baseline": None,
+    "samples": 0,
+    "folds": 0,
+}
+
+
+def vol_walk_forward(X, y, labeled, model_id, horizon, detailed=True):
+    """
+    Walk-forward test of a volatility model against the baseline
+    'next period's volatility = last period's volatility'.
+    """
+
+    splits = _wf_split_count(len(X), horizon)
+
+    if splits < 2:
+        return dict(EMPTY_VOL_WALK_FORWARD), None
+
+    gap = max(0, horizon - 1)
+
+    actual_log = y.to_numpy(dtype=float)
+    baseline_vol = labeled["Baseline_Vol"].to_numpy(dtype=float)
+    baseline_log = np.log(np.clip(baseline_vol, 1e-4, None))
+
+    splitter = TimeSeriesSplit(
+        n_splits=splits,
+        test_size=WF_TEST_SIZE,
+        gap=gap,
+    )
+
+    indices, predicted_log = [], []
+
+    for train_idx, test_idx in splitter.split(X):
+
+        model = create_model(model_id)
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+
+        predicted_log.extend(
+            np.clip(model.predict(X.iloc[test_idx]), 0.0, np.log(400.0))
+        )
+        indices.extend(test_idx)
+
+    indices = np.asarray(indices)
+    predicted_log = np.asarray(predicted_log)
+
+    actual_vol = labeled["Target_Vol"].to_numpy(dtype=float)[indices]
+    predicted_vol = np.exp(predicted_log)
+    base_vol = baseline_vol[indices]
+
+    metrics = calculate_metrics(actual_vol, predicted_vol)
+    baseline_metrics = calculate_metrics(actual_vol, base_vol)
+
+    dm_p = diebold_mariano_p(
+        baseline_errors=actual_log[indices] - baseline_log[indices],
+        model_errors=actual_log[indices] - predicted_log,
+        horizon=horizon,
+    )
+
+    improvement = (
+        (baseline_metrics["mae"] - metrics["mae"])
+        / baseline_metrics["mae"] * 100
+        if baseline_metrics["mae"] > 0 else None
+    )
+
+    summary = {
+        "mae": round(metrics["mae"], 4),
+        "rmse": round(metrics["rmse"], 4),
+        "baseline_mae": round(baseline_metrics["mae"], 4),
+        "baseline_rmse": round(baseline_metrics["rmse"], 4),
+        "mae_improvement_pct": (
+            None if improvement is None else round(float(improvement), 2)
+        ),
+        "dm_p_value": None if dm_p is None else round(dm_p, 4),
+        "beats_baseline": bool(metrics["mae"] < baseline_metrics["mae"]),
+        "samples": int(len(indices)),
+        "folds": int(splits),
+    }
+
+    evaluation = None
+
+    if detailed:
+        evaluation = {
+            "dates": (
+                labeled["Target_Date"].iloc[indices]
+                .dt.strftime("%Y-%m-%d").tolist()
+            ),
+            "actual": [round(float(v), 3) for v in actual_vol],
+            "predicted": [round(float(v), 3) for v in predicted_vol],
+            "baseline": [round(float(v), 3) for v in base_vol],
+        }
+
+    return summary, evaluation
+
+
+def volatility_forecast(data, model_id, horizon=5, detailed=True):
+
+    if model_id not in MODELS:
+        raise ValueError(f"Unknown model: {model_id}")
+
+    labeled, X, y, latest, current_vol = prepare_vol_data(
+        data, horizon=horizon
+    )
+
+    summary, evaluation = vol_walk_forward(
+        X, y, labeled, model_id, horizon, detailed=detailed
+    )
+
+    final_model = create_model(model_id)
+    final_model.fit(X, y)
+
+    predicted_log = float(
+        np.clip(final_model.predict(latest)[0], 0.0, np.log(400.0))
+    )
+    forecast_vol = float(np.exp(predicted_log))
+
+    return {
+        "horizon": horizon,
+        "horizon_label": f"next {horizon} trading days",
+        "model_name": MODELS[model_id],
+        "forecast_vol": round(forecast_vol, 2),
+        "current_vol": round(current_vol, 2),
+        "change_pct": round((forecast_vol / current_vol - 1) * 100, 2)
+        if current_vol > 0 else None,
+        "walk_forward": summary,
+        "evaluation": evaluation,
+    }
+
+
+def predict_volatility_all(data, model_id):
+
+    return {
+        f"{horizon}_day": volatility_forecast(
+            data, model_id, horizon=horizon, detailed=True
+        )
+        for horizon in VOL_HORIZONS
+    }
+
+
+def compare_volatility_models(data):
+
+    results = []
+
+    for model_id, model_name in MODELS.items():
+
+        horizons = {}
+
+        for horizon in VOL_HORIZONS:
+            result = volatility_forecast(
+                data, model_id, horizon=horizon, detailed=False
+            )
+            horizons[f"{horizon}_day"] = {
+                "horizon": horizon,
+                "forecast_vol": result["forecast_vol"],
+                "current_vol": result["current_vol"],
+                "walk_forward": result["walk_forward"],
+            }
+
+        results.append({
+            "model_id": model_id,
+            "model_name": model_name,
+            "horizons": horizons,
+        })
 
     return results

@@ -8,12 +8,16 @@ import yfinance as yf
 
 from model import (
     HORIZONS,
+    VOL_HORIZONS,
     MODELS,
     train_model,
     predict_all_horizons,
     compare_models,
+    predict_ranges,
+    predict_volatility_all,
+    volatility_forecast,
+    compare_volatility_models,
 )
-from spark_data import get_stock_data
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
@@ -27,18 +31,16 @@ TICKERS = {
 TRADING_DAYS = 252
 DEFAULT_RISK_FREE_RATE = 0.04
 
-MODEL_PERIOD = "10y"
-DISPLAY_PERIOD = "2y"
+MODEL_PERIOD = "10y"     # data used for training/evaluation
+DISPLAY_PERIOD = "2y"    # dashboard chart + risk page
 CACHE_SECONDS = 3600
-CONTEXT_SYMBOLS = {
-    "SPX_Close": "^GSPC",
-    "VIX_Close": "^VIX",
-}
+CONTEXT_SYMBOLS = {"SPX_Close": "^GSPC", "VIX_Close": "^VIX"}
 
 _cache = {}
 
 
 def cached(key, builder):
+    """Tiny in-memory cache so every click doesn't re-download and re-train."""
     hit = _cache.get(key)
 
     if hit and time.time() - hit[0] < CACHE_SECONDS:
@@ -53,6 +55,7 @@ def cached(key, builder):
 
 
 def download_close_series(symbol, period):
+    """Download one context series (S&P 500, VIX) as a Close-price Series."""
     try:
         raw = yf.download(
             symbol,
@@ -76,100 +79,19 @@ def download_close_series(symbol, period):
 
     except Exception:
         app.logger.exception(
-            "Failed to download context series %s",
-            symbol,
+            "Failed to download context series %s", symbol
         )
         return None
 
 
 def get_company_data(company, period=DISPLAY_PERIOD, with_context=False):
-    if company not in TICKERS:
+    """Download and clean daily adjusted OHLCV data from Yahoo Finance."""
+    ticker = TICKERS.get(company)
+
+    if ticker is None:
         return None
 
     try:
-        data = get_stock_data(company)
-
-        required = [
-            "Date",
-            "Open",
-            "High",
-            "Low",
-            "Close",
-            "Volume",
-        ]
-
-        if data is None or data.empty:
-            raise ValueError("No stock data returned from HDFS.")
-
-        data = data[required].copy()
-        data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
-
-        for column in ["Open", "High", "Low", "Close", "Volume"]:
-            data[column] = pd.to_numeric(data[column], errors="coerce")
-
-        data = data.dropna(subset=required)
-        data = data[
-            (data["Close"] > 0) & (data["Open"] > 0)
-        ]
-
-        data = (
-            data.sort_values("Date")
-            .drop_duplicates(subset=["Date"], keep="last")
-            .reset_index(drop=True)
-        )
-
-        if len(data) >= 100 and not with_context:
-            app.logger.info(
-                "Loaded %d records for %s from Spark/HDFS",
-                len(data),
-                company,
-            )
-            data = data.tail(
-                10000
-            ).reset_index(drop=True)
-            return data
-
-        if len(data) >= 100 and with_context:
-            data = data.tail(
-                10000
-            ).reset_index(drop=True)
-
-            if period == MODEL_PERIOD:
-                data = data.tail(2520).reset_index(drop=True)
-
-            for column, symbol in CONTEXT_SYMBOLS.items():
-                series = download_close_series(symbol, period)
-
-                if series is not None:
-                    context = (
-                        series.rename(column)
-                        .rename_axis("Date")
-                        .reset_index()
-                    )
-                    context["Date"] = pd.to_datetime(context["Date"])
-                    data = data.merge(
-                        context,
-                        on="Date",
-                        how="left",
-                    )
-                    data[column] = data[column].ffill()
-
-            return data
-
-        app.logger.warning(
-            "Insufficient HDFS records for %s; trying Yahoo Finance",
-            company,
-        )
-
-    except Exception:
-        app.logger.exception(
-            "Failed to load data from Spark/HDFS for %s",
-            company,
-        )
-
-    try:
-        ticker = TICKERS[company]
-
         data = yf.download(
             ticker,
             period=period,
@@ -182,6 +104,7 @@ def get_company_data(company, period=DISPLAY_PERIOD, with_context=False):
         if data is None or data.empty:
             return None
 
+        # Handle MultiIndex columns returned by some yfinance versions.
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
 
@@ -197,25 +120,47 @@ def get_company_data(company, period=DISPLAY_PERIOD, with_context=False):
         ]
 
         if not all(column in data.columns for column in required):
+            app.logger.error(
+                "Yahoo Finance response missing required columns for %s",
+                company,
+            )
             return None
 
         data = data[required].copy()
-        data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+        data["Date"] = pd.to_datetime(
+            data["Date"],
+            errors="coerce",
+        )
 
         for column in ["Open", "High", "Low", "Close", "Volume"]:
-            data[column] = pd.to_numeric(data[column], errors="coerce")
+            data[column] = pd.to_numeric(
+                data[column],
+                errors="coerce",
+            )
 
-        data = data.dropna(subset=required)
+        data = data.dropna(
+            subset=[
+                "Date",
+                "Open",
+                "High",
+                "Low",
+                "Close",
+                "Volume",
+            ]
+        )
+
         data = data[
-            (data["Close"] > 0) & (data["Open"] > 0)
+            (data["Close"] > 0)
+            & (data["Open"] > 0)
         ]
 
         data = (
             data.sort_values("Date")
-            .drop_duplicates(subset=["Date"], keep="last")
+            .drop_duplicates("Date", keep="last")
             .reset_index(drop=True)
         )
 
+        # Optional market-context columns (S&P 500, VIX) for the models
         if with_context:
             for column, symbol in CONTEXT_SYMBOLS.items():
                 series = download_close_series(symbol, period)
@@ -226,25 +171,21 @@ def get_company_data(company, period=DISPLAY_PERIOD, with_context=False):
                         .rename_axis("Date")
                         .reset_index()
                     )
-                    context["Date"] = pd.to_datetime(context["Date"])
-                    data = data.merge(
-                        context,
-                        on="Date",
-                        how="left",
-                    )
+                    data = data.merge(context, on="Date", how="left")
                     data[column] = data[column].ffill()
 
         return data
 
     except Exception:
         app.logger.exception(
-            "Failed to retrieve stock data for %s",
+            "Failed to retrieve stock data from Yahoo Finance for %s",
             company,
         )
         return None
 
 
 def get_model_data(company):
+    """10 years of data plus market context, cached for an hour."""
     data = cached(
         ("model_data", company),
         lambda: get_company_data(
@@ -254,10 +195,21 @@ def get_model_data(company):
         ),
     )
 
+    if data is not None:
+        app.logger.info(
+            "Model data for %s: %d rows, %s -> %s, columns: %s",
+            company,
+            len(data),
+            data["Date"].iloc[0].date(),
+            data["Date"].iloc[-1].date(),
+            list(data.columns),
+        )
+
     return None if data is None else data.copy()
 
 
 def json_safe(value):
+    """Convert NumPy and Pandas values into JSON-compatible values."""
     if isinstance(value, dict):
         return {
             str(key): json_safe(item)
@@ -308,10 +260,7 @@ def get_company_data_api(company):
     if company not in TICKERS:
         return jsonify({"error": "Company not found."}), 404
 
-    data = cached(
-        ("display_data", company),
-        lambda: get_company_data(company, period=DISPLAY_PERIOD),
-    )
+    data = get_company_data(company)
 
     if data is None or data.empty:
         return jsonify({
@@ -361,10 +310,7 @@ def calculate_risk(company):
     if company not in TICKERS:
         return jsonify({"error": "Company not found."}), 404
 
-    data = cached(
-        ("risk_data", company),
-        lambda: get_company_data(company, period=DISPLAY_PERIOD),
-    )
+    data = get_company_data(company)
 
     if data is None or len(data) < 30:
         return jsonify({
@@ -578,6 +524,122 @@ def compare_company_models(company):
 
         return jsonify({
             "error": "Model comparison failed. Check the VS Code terminal."
+        }), 500
+
+
+@app.route("/api/range/<company>")
+def prediction_ranges(company):
+    """90% price ranges (1, 5 and 10 trading days) with calibration checks."""
+    if company not in TICKERS:
+        return jsonify({"error": "Company not found."}), 404
+
+    data = get_model_data(company)
+
+    if data is None or len(data) < 300:
+        return jsonify({
+            "error": "Unable to retrieve enough historical data."
+        }), 502
+
+    try:
+        results = cached(
+            ("range", company, str(data["Date"].iloc[-1])),
+            lambda: predict_ranges(data),
+        )
+
+        return jsonify(json_safe({
+            "company": company,
+            "horizons": results,
+        }))
+
+    except Exception:
+        app.logger.exception(
+            "Range forecast failed for %s",
+            company,
+        )
+
+        return jsonify({
+            "error": "Range forecast failed. Check the VS Code terminal."
+        }), 500
+
+
+@app.route("/api/volatility/<company>")
+def volatility_company(company):
+    """Volatility forecasts (5, 10 and 20 trading days) for one model."""
+    if company not in TICKERS:
+        return jsonify({"error": "Company not found."}), 404
+
+    model_id = request.args.get("model", "linear_regression")
+
+    if model_id not in MODELS:
+        return jsonify({"error": "Unknown model selected."}), 400
+
+    data = get_model_data(company)
+
+    if data is None or len(data) < 300:
+        return jsonify({
+            "error": "Unable to retrieve enough historical data."
+        }), 502
+
+    try:
+        results = cached(
+            ("volatility", company, model_id, str(data["Date"].iloc[-1])),
+            lambda: predict_volatility_all(data, model_id),
+        )
+
+        return jsonify(json_safe({
+            "company": company,
+            "model_id": model_id,
+            "model_name": MODELS[model_id],
+            "horizons": results,
+        }))
+
+    except Exception:
+        app.logger.exception(
+            "Volatility forecast failed for %s using %s",
+            company,
+            model_id,
+        )
+
+        return jsonify({
+            "error": "Volatility forecast failed. Check the VS Code terminal."
+        }), 500
+
+
+@app.route("/api/volatility-compare/<company>")
+def volatility_compare(company):
+    """All five models vs the baseline on volatility, at every horizon."""
+    if company not in TICKERS:
+        return jsonify({"error": "Company not found."}), 404
+
+    data = get_model_data(company)
+
+    if data is None or len(data) < 300:
+        return jsonify({
+            "error": "Unable to retrieve enough historical data."
+        }), 502
+
+    try:
+        results = cached(
+            ("volatility-compare", company, str(data["Date"].iloc[-1])),
+            lambda: compare_volatility_models(data),
+        )
+
+        return jsonify(json_safe({
+            "company": company,
+            "results": results,
+        }))
+
+    except Exception:
+        app.logger.exception(
+            "Volatility comparison failed for %s",
+            company,
+        )
+
+        return jsonify({
+            "error": (
+                "Volatility comparison failed. "
+                "Check the VS Code terminal."
+            )
         }), 500
 
 

@@ -5,15 +5,27 @@ let predictionChart = null;
 let comparisonChart = null;
 let cumulativeReturnChart = null;
 let drawdownChart = null;
+let rangeChart = null;
+let volChart = null;
 
 let currentCompany = "Apple";
 let currentModel = "random_forest";
+
+// Results kept in memory so dropdowns can re-render without new requests
+let comparisonResults = [];
+let rangeData = null;
+let volData = null;
+let volCompareResults = [];
 
 const $ = (id) => document.getElementById(id);
 
 const numberFormat = new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 2
 });
+
+/* ------------------------------------------------------------------ */
+/* Formatting helpers                                                  */
+/* ------------------------------------------------------------------ */
 
 function setText(id, value) {
     const element = $(id);
@@ -74,6 +86,28 @@ function formatMetric(value, digits = 2) {
     });
 }
 
+function formatPlainPercent(value, digits = 2) {
+    const text = formatMetric(value, digits);
+    return text === "—" ? text : `${text}%`;
+}
+
+function formatPValue(value) {
+    const number = Number(value);
+
+    if (value === null || value === undefined || !Number.isFinite(number)) {
+        return "—";
+    }
+
+    return number < 0.001 ? "<0.001" : number.toFixed(3);
+}
+
+function horizonText(key) {
+    const days = parseInt(String(key), 10);
+    return Number.isFinite(days)
+        ? `${days} trading day${days === 1 ? "" : "s"}`
+        : String(key);
+}
+
 function setMetricColor(id, value) {
     const element = $(id);
 
@@ -111,6 +145,13 @@ function setStatus(id, message, type = "") {
     }
 }
 
+function setButtonDisabled(id, disabled) {
+    const element = $(id);
+    if (element) {
+        element.disabled = disabled;
+    }
+}
+
 async function fetchJSON(url) {
     const response = await fetch(url, {
         headers: {
@@ -136,6 +177,10 @@ async function fetchJSON(url) {
 
     return payload;
 }
+
+/* ------------------------------------------------------------------ */
+/* Charts                                                              */
+/* ------------------------------------------------------------------ */
 
 function destroyChart(chart) {
     if (chart) {
@@ -218,6 +263,10 @@ function makeBarChart(canvasId, labels, datasets, yTitle = "") {
     });
 }
 
+/* ------------------------------------------------------------------ */
+/* Dashboard                                                           */
+/* ------------------------------------------------------------------ */
+
 async function loadCompanyData() {
     const companySelect = $("companySelect");
 
@@ -288,12 +337,18 @@ async function loadCompanyData() {
 
         await Promise.allSettled([
             loadRiskData(),
-            loadPrediction()
+            loadPrediction(),
+            loadRanges(),
+            loadVolatility()
         ]);
     } catch (error) {
         setStatus("globalStatus", error.message, "error");
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Price forecasts                                                     */
+/* ------------------------------------------------------------------ */
 
 function renderHorizonForecasts(horizons) {
     const horizonCards = [
@@ -432,9 +487,7 @@ async function loadPrediction() {
         "loading"
     );
 
-    if ($("predictButton")) {
-        $("predictButton").disabled = true;
-    }
+    setButtonDisabled("predictButton", true);
 
     try {
         const query = new URLSearchParams({
@@ -457,13 +510,15 @@ async function loadPrediction() {
     } catch (error) {
         setStatus("predictionStatus", error.message, "error");
     } finally {
-        if ($("predictButton")) {
-            $("predictButton").disabled = false;
-        }
+        setButtonDisabled("predictButton", false);
     }
 }
 
-function renderComparisonTable(results) {
+/* ------------------------------------------------------------------ */
+/* Price model comparison (with horizon selector)                      */
+/* ------------------------------------------------------------------ */
+
+function renderComparisonTable(rows) {
     const body = $("comparisonTableBody");
 
     if (!body) {
@@ -484,7 +539,7 @@ function renderComparisonTable(results) {
 
     const columnCount = 13;
 
-    if (!Array.isArray(results) || results.length === 0) {
+    if (!Array.isArray(rows) || rows.length === 0) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
 
@@ -497,9 +552,9 @@ function renderComparisonTable(results) {
         return;
     }
 
-    results.forEach((result) => {
+    rows.forEach(({ result, h }) => {
         const row = document.createElement("tr");
-        const wf = result.walk_forward || {};
+        const wf = h.walk_forward || {};
 
         // Verdict uses WALK-FORWARD results (many more test days than the holdout)
         let verdict = "—";
@@ -514,21 +569,19 @@ function renderComparisonTable(results) {
             }
         }
 
-        const pct = (v) => (v == null ? "—" : `${formatMetric(v)}%`);
-
         const values = [
             result.model_name || result.model_id || "Unknown model",
-            formatPrice(result.predicted_price),
-            formatMetric(result.mae),
-            formatMetric(result.rmse),
-            formatMetric(result.baseline_mae),
-            formatMetric(result.baseline_rmse),
-            pct(result.directional_accuracy),
+            formatPrice(h.predicted_price),
+            formatMetric(h.mae),
+            formatMetric(h.rmse),
+            formatMetric(h.baseline_mae),
+            formatMetric(h.baseline_rmse),
+            formatPlainPercent(h.directional_accuracy),
             formatMetric(wf.mae),
             formatMetric(wf.rmse),
             formatMetric(wf.baseline_mae),
             formatMetric(wf.baseline_rmse),
-            pct(wf.directional_accuracy),
+            formatPlainPercent(wf.directional_accuracy),
             verdict
         ];
 
@@ -559,6 +612,39 @@ function renderComparisonTable(results) {
     });
 }
 
+function renderComparisonView() {
+    const key = $("compareHorizonSelect")?.value || "1_day";
+
+    const rows = comparisonResults
+        .map((result) => ({ result, h: result.horizons?.[key] }))
+        .filter((item) => item.h)
+        .sort((a, b) => {
+            const aMae = a.h.walk_forward?.mae ?? Infinity;
+            const bMae = b.h.walk_forward?.mae ?? Infinity;
+            return aMae - bMae;
+        });
+
+    renderComparisonTable(rows);
+
+    destroyChart(comparisonChart);
+
+    comparisonChart = makeBarChart(
+        "comparisonChart",
+        rows.map(({ result }) => result.model_name || result.model_id),
+        [
+            {
+                label: "Model MAE (walk-forward)",
+                data: rows.map(({ h }) => h.walk_forward?.mae ?? null)
+            },
+            {
+                label: "Baseline MAE (walk-forward)",
+                data: rows.map(({ h }) => h.walk_forward?.baseline_mae ?? null)
+            }
+        ],
+        `Mean absolute error (${horizonText(key)})`
+    );
+}
+
 async function loadModelComparison() {
     const companySelect = $("companySelect");
 
@@ -570,62 +656,538 @@ async function loadModelComparison() {
 
     setStatus(
         "comparisonStatus",
-        "Comparing all models (the first run can take a minute)...",
+        "Comparing all models at every horizon (the first run can take a minute)...",
         "loading"
     );
 
-    if ($("compareButton")) {
-        $("compareButton").disabled = true;
-    }
+    setButtonDisabled("compareButton", true);
 
     try {
         const data = await fetchJSON(
             `/api/compare/${encodeURIComponent(currentCompany)}`
         );
 
-        const results = Array.isArray(data.results)
+        comparisonResults = Array.isArray(data.results)
             ? data.results
             : [];
 
-        renderComparisonTable(results);
-
-        destroyChart(comparisonChart);
-
-        comparisonChart = makeBarChart(
-            "comparisonChart",
-            results.map(
-                (result) => result.model_name || result.model_id
-            ),
-            [
-                {
-                    label: "Model MAE (walk-forward)",
-                    data: results.map(
-                        (r) => r.walk_forward?.mae ?? null
-                    )
-                },
-                {
-                    label: "Baseline MAE (walk-forward)",
-                    data: results.map(
-                        (r) => r.walk_forward?.baseline_mae ?? null
-                    )
-                }
-            ],
-            "Mean absolute error"
-        );
+        renderComparisonView();
 
         setStatus(
             "comparisonStatus",
-            `Compared ${results.length} models for ${currentCompany}.`,
+            `Compared ${comparisonResults.length} models for ${currentCompany}. Use the horizon dropdown to switch between 1, 5 and 10 days.`,
             "success"
         );
     } catch (error) {
         setStatus("comparisonStatus", error.message, "error");
     } finally {
-        if ($("compareButton")) {
-            $("compareButton").disabled = false;
-        }
+        setButtonDisabled("compareButton", false);
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Prediction ranges                                                   */
+/* ------------------------------------------------------------------ */
+
+function renderRangeCards(horizons) {
+    const cards = [
+        { key: "1_day", id: "range1" },
+        { key: "5_day", id: "range5" },
+        { key: "10_day", id: "range10" }
+    ];
+
+    cards.forEach(({ key, id }) => {
+        const item = horizons && horizons[key];
+
+        if (!item) {
+            setText(`${id}Value`, "—");
+            setText(`${id}Width`, "—");
+            setText(`${id}Method`, "Not available");
+            return;
+        }
+
+        const method = item.methods?.[item.headline_method] || {};
+
+        setText(
+            `${id}Value`,
+            `${formatPrice(item.lower_price)} – ${formatPrice(item.upper_price)}`
+        );
+
+        setText(
+            `${id}Width`,
+            `Width: ${formatPlainPercent(item.width_pct, 1)} of the price`
+        );
+
+        setText(
+            `${id}Method`,
+            method.coverage == null
+                ? item.headline_name
+                : `${item.headline_name} · past coverage ${formatPlainPercent(method.coverage, 1)}`
+        );
+    });
+}
+
+function renderRangeTable(horizons) {
+    const body = $("rangeTableBody");
+
+    if (!body) {
+        return;
+    }
+
+    body.replaceChildren();
+
+    const rows = [];
+
+    ["1_day", "5_day", "10_day"].forEach((key) => {
+        const item = horizons && horizons[key];
+
+        if (!item) {
+            return;
+        }
+
+        Object.entries(item.methods || {}).forEach(([methodKey, method]) => {
+            rows.push({ item, methodKey, method });
+        });
+    });
+
+    if (rows.length === 0) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+
+        cell.colSpan = 6;
+        cell.textContent = "No range results are available.";
+
+        row.appendChild(cell);
+        body.appendChild(row);
+
+        return;
+    }
+
+    rows.forEach(({ item, methodKey, method }) => {
+        const row = document.createElement("tr");
+
+        const values = [
+            horizonText(item.horizon),
+            method.name,
+            formatPlainPercent(method.coverage, 1),
+            formatPlainPercent(method.width_pct, 1),
+            method.verdict || "—",
+            item.headline_method === methodKey ? "Yes" : ""
+        ];
+
+        values.forEach((value, index) => {
+            const cell = document.createElement("td");
+
+            cell.textContent = value;
+
+            if (index === 0) {
+                cell.classList.add("model-name-cell");
+            }
+
+            if (index === 4) {
+                cell.classList.add(
+                    value === "Well calibrated"
+                        ? "positive"
+                        : value === "Too narrow"
+                            ? "negative"
+                            : "neutral"
+                );
+            }
+
+            row.appendChild(cell);
+        });
+
+        body.appendChild(row);
+    });
+}
+
+function renderRangeChart() {
+    destroyChart(rangeChart);
+    rangeChart = null;
+
+    const key = $("rangeHorizonSelect")?.value || "1_day";
+    const item = rangeData?.[key];
+    const evaluation = item?.evaluation;
+
+    if (!evaluation || !evaluation.dates || evaluation.dates.length === 0) {
+        return;
+    }
+
+    rangeChart = makeLineChart(
+        "rangeChart",
+        evaluation.dates,
+        [
+            {
+                label: "Actual price",
+                data: evaluation.actual,
+                borderColor: "#f8fafc",
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.05
+            },
+            {
+                label: "Lower end of range",
+                data: evaluation.lower,
+                borderColor: "rgba(56, 189, 248, 0.7)",
+                borderWidth: 1,
+                pointRadius: 0,
+                tension: 0.05,
+                fill: false
+            },
+            {
+                label: `Upper end of range (${item.range_level}%)`,
+                data: evaluation.upper,
+                borderColor: "rgba(56, 189, 248, 0.7)",
+                backgroundColor: "rgba(56, 189, 248, 0.18)",
+                borderWidth: 1,
+                pointRadius: 0,
+                tension: 0.05,
+                fill: "-1"
+            }
+        ],
+        "Price (USD)"
+    );
+}
+
+async function loadRanges() {
+    const companySelect = $("companySelect");
+
+    if (!companySelect) {
+        return;
+    }
+
+    currentCompany = companySelect.value;
+
+    setStatus(
+        "rangeStatus",
+        "Calculating prediction ranges...",
+        "loading"
+    );
+
+    setButtonDisabled("rangeButton", true);
+
+    try {
+        const data = await fetchJSON(
+            `/api/range/${encodeURIComponent(currentCompany)}`
+        );
+
+        rangeData = data.horizons || {};
+
+        renderRangeCards(rangeData);
+        renderRangeTable(rangeData);
+        renderRangeChart();
+
+        setStatus(
+            "rangeStatus",
+            `Prediction ranges updated for ${currentCompany}.`,
+            "success"
+        );
+    } catch (error) {
+        setStatus("rangeStatus", error.message, "error");
+    } finally {
+        setButtonDisabled("rangeButton", false);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Volatility forecasting                                              */
+/* ------------------------------------------------------------------ */
+
+function renderVolCards(horizons) {
+    const cards = [
+        { key: "5_day", id: "vol5" },
+        { key: "10_day", id: "vol10" },
+        { key: "20_day", id: "vol20" }
+    ];
+
+    cards.forEach(({ key, id }) => {
+        const item = horizons && horizons[key];
+
+        if (!item) {
+            setText(`${id}Value`, "—");
+            setText(`${id}Change`, "—");
+            setText(`${id}Detail`, "—");
+            return;
+        }
+
+        setText(`${id}Value`, formatPlainPercent(item.forecast_vol, 1));
+
+        setText(
+            `${id}Change`,
+            item.change_pct == null
+                ? "—"
+                : `${formatPercent(item.change_pct, 1)} vs recent`
+        );
+
+        // More volatility = more risk, so an increase is shown in red
+        setMetricColor(
+            `${id}Change`,
+            item.change_pct == null ? null : -item.change_pct
+        );
+
+        setText(
+            `${id}Detail`,
+            `Last ${item.horizon} days: ${formatPlainPercent(item.current_vol, 1)}`
+        );
+    });
+}
+
+function volVerdictText(wf) {
+    if (!wf || typeof wf.beats_baseline !== "boolean") {
+        return { text: "Not enough data to evaluate this model.", type: "" };
+    }
+
+    if (!wf.beats_baseline) {
+        return {
+            text: "This model does not beat the baseline at this horizon.",
+            type: "error"
+        };
+    }
+
+    if (wf.dm_p_value != null && wf.dm_p_value < 0.05) {
+        return {
+            text: "This model beats the baseline, and the improvement is statistically significant (unlikely to be luck).",
+            type: "success"
+        };
+    }
+
+    return {
+        text: "This model is slightly better than the baseline, but the improvement is not statistically significant.",
+        type: ""
+    };
+}
+
+function renderVolDetail() {
+    const key = $("volHorizonSelect")?.value || "5_day";
+    const item = volData?.[key];
+
+    destroyChart(volChart);
+    volChart = null;
+
+    if (!item) {
+        return;
+    }
+
+    const wf = item.walk_forward || {};
+
+    setText("volModelMAE", formatMetric(wf.mae));
+    setText("volBaselineMAE", formatMetric(wf.baseline_mae));
+    setText("volImprovement", formatPercent(wf.mae_improvement_pct, 1));
+    setText("volPValue", formatPValue(wf.dm_p_value));
+
+    setMetricColor("volImprovement", wf.mae_improvement_pct);
+
+    const verdict = volVerdictText(wf);
+    setStatus("volVerdict", verdict.text, verdict.type);
+
+    const evaluation = item.evaluation;
+
+    if (!evaluation || !evaluation.dates || evaluation.dates.length === 0) {
+        return;
+    }
+
+    volChart = makeLineChart(
+        "volChart",
+        evaluation.dates,
+        [
+            {
+                label: "Actual volatility",
+                data: evaluation.actual,
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.1
+            },
+            {
+                label: "Model forecast",
+                data: evaluation.predicted,
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.1
+            },
+            {
+                label: "Baseline (last period)",
+                data: evaluation.baseline,
+                borderWidth: 1.5,
+                pointRadius: 0,
+                borderDash: [5, 5],
+                tension: 0.1
+            }
+        ],
+        "Annualized volatility (%)"
+    );
+}
+
+async function loadVolatility() {
+    const companySelect = $("companySelect");
+    const modelSelect = $("volModelSelect");
+
+    if (!companySelect || !modelSelect) {
+        return;
+    }
+
+    currentCompany = companySelect.value;
+
+    setStatus(
+        "volStatus",
+        "Training volatility models...",
+        "loading"
+    );
+
+    setButtonDisabled("volButton", true);
+
+    try {
+        const query = new URLSearchParams({ model: modelSelect.value });
+
+        const data = await fetchJSON(
+            `/api/volatility/${encodeURIComponent(currentCompany)}?${query.toString()}`
+        );
+
+        volData = data.horizons || {};
+
+        renderVolCards(volData);
+        renderVolDetail();
+
+        setStatus(
+            "volStatus",
+            `${data.model_name} volatility forecasts generated for ${currentCompany}.`,
+            "success"
+        );
+    } catch (error) {
+        setStatus("volStatus", error.message, "error");
+    } finally {
+        setButtonDisabled("volButton", false);
+    }
+}
+
+function renderVolComparisonTable() {
+    const body = $("volCompareTableBody");
+
+    if (!body) {
+        return;
+    }
+
+    body.replaceChildren();
+
+    const key = $("volHorizonSelect")?.value || "5_day";
+
+    const rows = volCompareResults
+        .map((result) => ({ result, h: result.horizons?.[key] }))
+        .filter((item) => item.h)
+        .sort((a, b) => {
+            const aGain = a.h.walk_forward?.mae_improvement_pct ?? -Infinity;
+            const bGain = b.h.walk_forward?.mae_improvement_pct ?? -Infinity;
+            return bGain - aGain;
+        });
+
+    if (rows.length === 0) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+
+        cell.colSpan = 8;
+        cell.textContent = "No volatility results are available.";
+
+        row.appendChild(cell);
+        body.appendChild(row);
+
+        return;
+    }
+
+    rows.forEach(({ result, h }) => {
+        const row = document.createElement("tr");
+        const wf = h.walk_forward || {};
+
+        let verdict = "—";
+
+        if (typeof wf.beats_baseline === "boolean") {
+            if (!wf.beats_baseline) {
+                verdict = "No";
+            } else if (wf.dm_p_value != null && wf.dm_p_value < 0.05) {
+                verdict = "Yes (significant)";
+            } else {
+                verdict = "Yes (not significant)";
+            }
+        }
+
+        const values = [
+            result.model_name || result.model_id,
+            formatPlainPercent(h.forecast_vol, 1),
+            formatPlainPercent(h.current_vol, 1),
+            formatMetric(wf.mae),
+            formatMetric(wf.baseline_mae),
+            formatPercent(wf.mae_improvement_pct, 1),
+            formatPValue(wf.dm_p_value),
+            verdict
+        ];
+
+        values.forEach((value, index) => {
+            const cell = document.createElement("td");
+
+            cell.textContent = value;
+
+            if (index === 0) {
+                cell.classList.add("model-name-cell");
+            }
+
+            if (index === 7) {
+                cell.classList.add(
+                    value.startsWith("Yes")
+                        ? "positive"
+                        : value === "No"
+                            ? "negative"
+                            : "neutral"
+                );
+            }
+
+            row.appendChild(cell);
+        });
+
+        body.appendChild(row);
+    });
+}
+
+async function loadVolatilityComparison() {
+    const companySelect = $("companySelect");
+
+    if (!companySelect) {
+        return;
+    }
+
+    currentCompany = companySelect.value;
+
+    setStatus(
+        "volCompareStatus",
+        "Comparing all volatility models (the first run can take a minute)...",
+        "loading"
+    );
+
+    setButtonDisabled("volCompareButton", true);
+
+    try {
+        const data = await fetchJSON(
+            `/api/volatility-compare/${encodeURIComponent(currentCompany)}`
+        );
+
+        volCompareResults = Array.isArray(data.results)
+            ? data.results
+            : [];
+
+        renderVolComparisonTable();
+
+        setStatus(
+            "volCompareStatus",
+            `Compared ${volCompareResults.length} volatility models for ${currentCompany}. Use the horizon dropdown above to switch horizons.`,
+            "success"
+        );
+    } catch (error) {
+        setStatus("volCompareStatus", error.message, "error");
+    } finally {
+        setButtonDisabled("volCompareButton", false);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Risk                                                                */
+/* ------------------------------------------------------------------ */
 
 async function loadRiskData() {
     const companySelect = $("companySelect");
@@ -729,40 +1291,50 @@ async function loadRiskData() {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Page wiring                                                         */
+/* ------------------------------------------------------------------ */
+
 async function refreshDashboard() {
+    // Old comparison tables belong to the previous company
+    comparisonResults = [];
+    volCompareResults = [];
+    renderComparisonTable([]);
+    renderVolComparisonTable();
+
     await loadCompanyData();
 }
 
 function setupEventListeners() {
-    $("companySelect")?.addEventListener(
-        "change",
-        refreshDashboard
-    );
+    $("companySelect")?.addEventListener("change", refreshDashboard);
+    $("refreshButton")?.addEventListener("click", refreshDashboard);
 
-    $("refreshButton")?.addEventListener(
-        "click",
-        refreshDashboard
-    );
-
-    $("predictButton")?.addEventListener(
-        "click",
-        loadPrediction
-    );
-
-    $("compareButton")?.addEventListener(
-        "click",
-        loadModelComparison
-    );
-
-    $("riskButton")?.addEventListener(
-        "click",
-        loadRiskData
-    );
+    $("predictButton")?.addEventListener("click", loadPrediction);
+    $("compareButton")?.addEventListener("click", loadModelComparison);
+    $("riskButton")?.addEventListener("click", loadRiskData);
 
     $("modelSelect")?.addEventListener("change", () => {
         currentModel = $("modelSelect").value;
         loadPrediction();
     });
+
+    // Horizon dropdowns re-render stored results (no new request)
+    $("compareHorizonSelect")?.addEventListener("change", () => {
+        if (comparisonResults.length > 0) {
+            renderComparisonView();
+        }
+    });
+
+    $("rangeButton")?.addEventListener("click", loadRanges);
+    $("rangeHorizonSelect")?.addEventListener("change", renderRangeChart);
+
+    $("volButton")?.addEventListener("click", loadVolatility);
+    $("volModelSelect")?.addEventListener("change", loadVolatility);
+    $("volHorizonSelect")?.addEventListener("change", () => {
+        renderVolDetail();
+        renderVolComparisonTable();
+    });
+    $("volCompareButton")?.addEventListener("click", loadVolatilityComparison);
 
     document.querySelectorAll(".nav-link").forEach((link) => {
         link.addEventListener("click", () => {

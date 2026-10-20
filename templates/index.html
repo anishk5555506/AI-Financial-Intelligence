@@ -28,6 +28,12 @@
                 <a href="#comparison" class="nav-link">
                     <span>⇄</span> Model Comparison
                 </a>
+                <a href="#range" class="nav-link">
+                    <span>↕</span> Prediction Range
+                </a>
+                <a href="#volatility" class="nav-link">
+                    <span>≈</span> Volatility
+                </a>
                 <a href="#risk" class="nav-link">
                     <span>◈</span> Risk Analysis
                 </a>
@@ -48,7 +54,8 @@
                     <p class="eyebrow">FINANCIAL ANALYTICS PLATFORM</p>
                     <h2>AI Financial Intelligence</h2>
                     <p class="subheading">
-                        Stock analytics, machine learning forecasts and risk metrics.
+                        Stock analytics, machine learning forecasts, prediction
+                        ranges, volatility forecasts and risk metrics.
                     </p>
                 </div>
 
@@ -68,6 +75,10 @@
             <div id="globalStatus" class="status-message" role="status">
                 Loading market data...
             </div>
+
+            <!-- ============================================ -->
+            <!-- DASHBOARD                                    -->
+            <!-- ============================================ -->
 
             <section id="dashboard" class="section">
                 <div class="section-heading">
@@ -118,6 +129,10 @@
                     <canvas id="priceChart"></canvas>
                 </div>
             </section>
+
+            <!-- ============================================ -->
+            <!-- PRICE FORECASTING                            -->
+            <!-- ============================================ -->
 
             <section id="forecast" class="section">
                 <div class="section-heading">
@@ -173,7 +188,7 @@
                         <p class="metric-label">Estimated price</p>
                         <h3 id="forecast5Price">—</h3>
                         <p id="forecast5Return" class="forecast-return">—</p>
-                        <p class="metric-footnote">
+                        <p id="forecast5Date" class="metric-footnote">
                             Approximately one trading week
                         </p>
                     </article>
@@ -186,7 +201,7 @@
                         <p class="metric-label">Estimated price</p>
                         <h3 id="forecast10Price">—</h3>
                         <p id="forecast10Return" class="forecast-return">—</p>
-                        <p class="metric-footnote">
+                        <p id="forecast10Date" class="metric-footnote">
                             Approximately two trading weeks
                         </p>
                     </article>
@@ -264,18 +279,34 @@
                 </p>
             </section>
 
+            <!-- ============================================ -->
+            <!-- PRICE MODEL COMPARISON                       -->
+            <!-- ============================================ -->
+
             <section id="comparison" class="section">
                 <div class="section-heading">
                     <div>
                         <p class="eyebrow">MODEL EVALUATION</p>
                         <h3>Compare machine learning models</h3>
                         <p class="section-description">
-                            Compare all five models using holdout and walk-forward evaluation.
+                            Compare all five models against the “tomorrow = today”
+                            baseline using holdout and walk-forward evaluation.
                         </p>
                     </div>
                     <button id="compareButton" class="button button-secondary" type="button">
                         Compare models
                     </button>
+                </div>
+
+                <div class="forecast-controls panel">
+                    <div class="field-group">
+                        <label for="compareHorizonSelect">Forecast horizon</label>
+                        <select id="compareHorizonSelect">
+                            <option value="1_day">1 trading day</option>
+                            <option value="5_day">5 trading days</option>
+                            <option value="10_day">10 trading days</option>
+                        </select>
+                    </div>
                 </div>
 
                 <p id="comparisonStatus" class="status-message" role="status"></p>
@@ -317,13 +348,16 @@
                     days. Lower MAE and RMSE are better. “Beats baseline?” uses the
                     walk-forward results and a Diebold-Mariano test: “significant”
                     means the improvement is unlikely to be luck (p &lt; 0.05).
+                    Changing the horizon re-sorts the table instantly; all three
+                    horizons are computed together.
                 </p>
 
                 <div class="section-heading subsection-heading">
                     <div>
                         <h3>Model error comparison</h3>
                         <p class="section-description">
-                            Compare each model's walk-forward MAE against the baseline MAE.
+                            Each model's walk-forward MAE against the baseline MAE for
+                            the selected horizon.
                         </p>
                     </div>
                 </div>
@@ -332,6 +366,322 @@
                     <canvas id="comparisonChart"></canvas>
                 </div>
             </section>
+
+            <!-- ============================================ -->
+            <!-- PREDICTION RANGE                             -->
+            <!-- ============================================ -->
+
+            <section id="range" class="section">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">UNCERTAINTY</p>
+                        <h3>Prediction range</h3>
+                        <p class="section-description">
+                            Instead of a single price, this shows the range the
+                            price will most likely land in (90% confidence).
+                            Because models cannot pick one exact price reliably,
+                            an honest range is more useful.
+                        </p>
+                    </div>
+                    <button id="rangeButton" class="button button-secondary" type="button">
+                        Refresh ranges
+                    </button>
+                </div>
+
+                <p id="rangeStatus" class="status-message" role="status">
+                    Loading prediction ranges...
+                </p>
+
+                <div class="forecast-grid">
+                    <article class="forecast-card">
+                        <div class="forecast-card-header">
+                            <span class="horizon-label">1 trading day</span>
+                            <span class="forecast-icon">↕</span>
+                        </div>
+                        <p class="metric-label">Likely price range (90%)</p>
+                        <h3 id="range1Value">—</h3>
+                        <p id="range1Width" class="forecast-return">—</p>
+                        <p id="range1Method" class="metric-footnote">Waiting for forecast</p>
+                    </article>
+
+                    <article class="forecast-card">
+                        <div class="forecast-card-header">
+                            <span class="horizon-label">5 trading days</span>
+                            <span class="forecast-icon">↕</span>
+                        </div>
+                        <p class="metric-label">Likely price range (90%)</p>
+                        <h3 id="range5Value">—</h3>
+                        <p id="range5Width" class="forecast-return">—</p>
+                        <p id="range5Method" class="metric-footnote">Waiting for forecast</p>
+                    </article>
+
+                    <article class="forecast-card">
+                        <div class="forecast-card-header">
+                            <span class="horizon-label">10 trading days</span>
+                            <span class="forecast-icon">↕</span>
+                        </div>
+                        <p class="metric-label">Likely price range (90%)</p>
+                        <h3 id="range10Value">—</h3>
+                        <p id="range10Width" class="forecast-return">—</p>
+                        <p id="range10Method" class="metric-footnote">Waiting for forecast</p>
+                    </article>
+                </div>
+
+                <div class="section-heading subsection-heading">
+                    <div>
+                        <h3>Is the range trustworthy?</h3>
+                        <p class="section-description">
+                            A 90% range should contain the real price about 90% of
+                            the time. “Coverage” is how often it actually did on
+                            past walk-forward test days.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="table-card">
+                    <div class="table-scroll">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Horizon</th>
+                                    <th>Method</th>
+                                    <th>Coverage (target 90%)</th>
+                                    <th>Average width</th>
+                                    <th>Verdict</th>
+                                    <th>Shown above?</th>
+                                </tr>
+                            </thead>
+                            <tbody id="rangeTableBody">
+                                <tr>
+                                    <td colspan="6">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <p class="muted-text table-note">
+                    Two methods are compared. “Quantile Gradient Boosting” is a
+                    machine learning model trained to predict the lower and upper
+                    ends of the range. “Volatility-scaled history” is a simple
+                    method that scales past price moves by recent volatility. The
+                    method whose coverage is closest to 90% is the one shown in the
+                    cards above. “Too narrow” means the range is overconfident;
+                    “Too wide” means it is more cautious than needed.
+                </p>
+
+                <div class="section-heading subsection-heading">
+                    <div>
+                        <h3>Actual price vs predicted range</h3>
+                        <p class="section-description">
+                            Past walk-forward test days: the line is the real
+                            price, the shaded band is the range that was predicted
+                            for it.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="forecast-controls panel">
+                    <div class="field-group">
+                        <label for="rangeHorizonSelect">Chart horizon</label>
+                        <select id="rangeHorizonSelect">
+                            <option value="1_day">1 trading day</option>
+                            <option value="5_day">5 trading days</option>
+                            <option value="10_day">10 trading days</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="chart-card chart-card-large">
+                    <canvas id="rangeChart"></canvas>
+                </div>
+
+                <p class="disclaimer">
+                    Ranges describe typical uncertainty based on past behavior.
+                    Real prices can and sometimes do fall outside them, and this is
+                    not financial advice.
+                </p>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- VOLATILITY                                   -->
+            <!-- ============================================ -->
+
+            <section id="volatility" class="section">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">RISK FORECASTING</p>
+                        <h3>Volatility forecasting</h3>
+                        <p class="section-description">
+                            Volatility is how much the price swings, not which way
+                            it goes. It comes in streaks (wild periods follow wild
+                            periods), which makes it much more predictable than the
+                            price itself. Values are annualized percentages.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="forecast-controls panel">
+                    <div class="field-group">
+                        <label for="volModelSelect">Volatility model</label>
+                        <select id="volModelSelect">
+                            <option value="linear_regression" selected>Ridge Regression</option>
+                            <option value="random_forest">Random Forest</option>
+                            <option value="hist_gradient_boosting">HistGradientBoosting</option>
+                            <option value="knn">KNN Regressor</option>
+                            <option value="svr">Support Vector Regression</option>
+                        </select>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="volHorizonSelect">Horizon for details</label>
+                        <select id="volHorizonSelect">
+                            <option value="5_day">5 trading days</option>
+                            <option value="10_day">10 trading days</option>
+                            <option value="20_day">20 trading days</option>
+                        </select>
+                    </div>
+
+                    <button id="volButton" class="button button-primary" type="button">
+                        Forecast volatility
+                    </button>
+                </div>
+
+                <p id="volStatus" class="status-message" role="status">
+                    Loading volatility forecasts...
+                </p>
+
+                <div class="forecast-grid">
+                    <article class="forecast-card">
+                        <div class="forecast-card-header">
+                            <span class="horizon-label">Next 5 trading days</span>
+                            <span class="forecast-icon">≈</span>
+                        </div>
+                        <p class="metric-label">Forecast volatility</p>
+                        <h3 id="vol5Value">—</h3>
+                        <p id="vol5Change" class="forecast-return">—</p>
+                        <p id="vol5Detail" class="metric-footnote">—</p>
+                    </article>
+
+                    <article class="forecast-card">
+                        <div class="forecast-card-header">
+                            <span class="horizon-label">Next 10 trading days</span>
+                            <span class="forecast-icon">≈</span>
+                        </div>
+                        <p class="metric-label">Forecast volatility</p>
+                        <h3 id="vol10Value">—</h3>
+                        <p id="vol10Change" class="forecast-return">—</p>
+                        <p id="vol10Detail" class="metric-footnote">—</p>
+                    </article>
+
+                    <article class="forecast-card">
+                        <div class="forecast-card-header">
+                            <span class="horizon-label">Next 20 trading days</span>
+                            <span class="forecast-icon">≈</span>
+                        </div>
+                        <p class="metric-label">Forecast volatility</p>
+                        <h3 id="vol20Value">—</h3>
+                        <p id="vol20Change" class="forecast-return">—</p>
+                        <p id="vol20Detail" class="metric-footnote">—</p>
+                    </article>
+                </div>
+
+                <div class="metric-grid evaluation-grid">
+                    <article class="metric-card">
+                        <p class="metric-label">Model MAE</p>
+                        <h3 id="volModelMAE">—</h3>
+                        <p class="metric-footnote">Walk-forward, volatility points</p>
+                    </article>
+
+                    <article class="metric-card">
+                        <p class="metric-label">Baseline MAE</p>
+                        <h3 id="volBaselineMAE">—</h3>
+                        <p class="metric-footnote">Next period = last period</p>
+                    </article>
+
+                    <article class="metric-card">
+                        <p class="metric-label">Improvement</p>
+                        <h3 id="volImprovement">—</h3>
+                        <p class="metric-footnote">Lower error than baseline</p>
+                    </article>
+
+                    <article class="metric-card">
+                        <p class="metric-label">Significance (p-value)</p>
+                        <h3 id="volPValue">—</h3>
+                        <p class="metric-footnote">Below 0.05 = unlikely to be luck</p>
+                    </article>
+                </div>
+
+                <p id="volVerdict" class="status-message" role="status"></p>
+
+                <div class="section-heading subsection-heading">
+                    <div>
+                        <h3>Actual vs predicted volatility</h3>
+                        <p class="section-description">
+                            Past walk-forward test days for the selected model and
+                            horizon.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="chart-card chart-card-large">
+                    <canvas id="volChart"></canvas>
+                </div>
+
+                <div class="section-heading subsection-heading">
+                    <div>
+                        <h3>Compare volatility models</h3>
+                        <p class="section-description">
+                            All five models against the baseline for the selected
+                            horizon.
+                        </p>
+                    </div>
+                    <button id="volCompareButton" class="button button-secondary" type="button">
+                        Compare volatility models
+                    </button>
+                </div>
+
+                <p id="volCompareStatus" class="status-message" role="status"></p>
+
+                <div class="table-card">
+                    <div class="table-scroll">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Model</th>
+                                    <th>Forecast volatility</th>
+                                    <th>Current volatility</th>
+                                    <th>Walk-forward MAE</th>
+                                    <th>Baseline MAE</th>
+                                    <th>Improvement</th>
+                                    <th>p-value</th>
+                                    <th>Beats baseline?</th>
+                                </tr>
+                            </thead>
+                            <tbody id="volCompareTableBody">
+                                <tr>
+                                    <td colspan="8">
+                                        Select “Compare volatility models” to load results.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <p class="muted-text table-note">
+                    The baseline assumes the next period will be exactly as volatile
+                    as the last period of the same length. “Beats baseline?” is
+                    “Yes (significant)” only when the model has lower error and a
+                    Diebold-Mariano p-value below 0.05. Current volatility is the
+                    realized volatility over the same number of recent days as the
+                    selected horizon.
+                </p>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- RISK                                         -->
+            <!-- ============================================ -->
 
             <section id="risk" class="section">
                 <div class="section-heading">
